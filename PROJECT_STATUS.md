@@ -43,6 +43,13 @@ launch-window exception: an un-onboarded app opens its window ~1s after
 launch so first-run setup is reachable; once `onboarded=1` nothing ever
 surfaces on its own.
 
+Production verification battery (installed build): http/https handler
+registered to the release bundle; copy produces no UI and no browser;
+rapid-fire GURLs route without windows or crashes (none in
+DiagnosticReports); quit-with-window + relaunch still yields 0 windows
+(state restoration honors `.suppressed`); runtime activation policy is
+accessory — menubar-only, no Dock tile or ⌘-tab entry.
+
 ## 2026-09-27 — deep audit pass 2 (local, unreleased)
 
 Continued the bug sweep into the last unreviewed surfaces. FocusWatcher's
