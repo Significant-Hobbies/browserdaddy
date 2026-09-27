@@ -77,7 +77,9 @@ public enum BrowserDiscovery {
     }
 
     /// Copy the DB (+wal/shm) to a temp dir — a running browser's lock
-    /// doesn't matter.
+    /// doesn't matter. A -journal sidecar is deliberately skipped: a hot
+    /// journal would force recovery on open, which a read-only connection
+    /// cannot perform.
     public static func snapshot(_ src: HistorySource, into tmp: URL) throws -> URL {
         let dst = tmp.appendingPathComponent(
             "\(src.browser)_\(src.profile.replacingOccurrences(of: " ", with: "_")).db")

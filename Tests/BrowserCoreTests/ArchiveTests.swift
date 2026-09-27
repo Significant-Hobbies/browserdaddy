@@ -57,6 +57,27 @@ final class ArchiveTests: XCTestCase {
         XCTAssertEqual(n, 0)
     }
 
+    func testWriteTransactionRollsBackAndLeavesConnectionUsable() throws {
+        XCTAssertThrowsError(try store.db.writeTransaction {
+            try store.db.execute(
+                "INSERT INTO meta (key, value) VALUES ('k','v')")
+            throw DBError(message: "boom")
+        })
+        XCTAssertNil(try store.db.scalar(
+            "SELECT value FROM meta WHERE key='k'", as: { $0.text }))
+        // A failed body must not leave an open transaction — writes work.
+        try store.db.execute(
+            "INSERT INTO meta (key, value) VALUES ('k2','v2')")
+        XCTAssertEqual(try store.db.scalar(
+            "SELECT value FROM meta WHERE key='k2'", as: { $0.text }), "v2")
+    }
+
+    func testQuerySurfacesStepErrorsInsteadOfTruncating() throws {
+        // A prepare-time failure must throw (previously any non-ROW step
+        // result silently ended the loop).
+        XCTAssertThrowsError(try store.db.query("SELECT nope FROM visits"))
+    }
+
     func testHistoryFiltersComposeAndExposeEffectiveTagProvenance() throws {
         let chrome = HistorySource(browser: "chrome", profile: "Work",
                                    path: tmp, engine: .chromium)

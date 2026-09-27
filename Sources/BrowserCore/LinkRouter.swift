@@ -20,7 +20,8 @@ public struct LinkTarget: Codable, Equatable, Sendable, Hashable, Identifiable {
 }
 
 /// First-match rule. Pattern semantics (case-insensitive):
-/// - contains "/" → glob against the full URL ("*github.com/*/pull/*")
+/// - contains "/" → glob against the full URL or host+path
+///   ("*github.com/*/pull/*", "github.com/o/r/pull/*")
 /// - contains "*" or "?" → glob against the host ("*.internal.*.dev")
 /// - otherwise → host equals pattern, or is a subdomain of it
 public struct RouteRule: Codable, Equatable, Sendable, Identifiable {
@@ -44,17 +45,15 @@ public struct RouterConfig: Codable, Equatable, Sendable {
     /// Manually declared Chromium profile dirs per browser — merged with
     /// profiles discovered under connected browser roots.
     public var profiles: [String: [String]] = [:]
-    /// Show the target picker for newly copied links. Rules preselect a row;
-    /// copying alone never opens a browser.
-    public var clipboardWatch = true
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, fallback, rules, profiles, clipboardWatch
+        case enabled, fallback, rules, profiles
     }
 
-    /// Tolerant decode — configs written before a field existed keep working.
+    /// Tolerant decode — configs written before a field existed keep
+    /// working (a dropped `clipboardWatch` key is simply ignored).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init()
@@ -64,8 +63,6 @@ public struct RouterConfig: Codable, Equatable, Sendable {
         rules = try c.decodeIfPresent([RouteRule].self, forKey: .rules) ?? []
         profiles = try c.decodeIfPresent([String: [String]].self,
                                          forKey: .profiles) ?? [:]
-        clipboardWatch = try c.decodeIfPresent(Bool.self,
-                                               forKey: .clipboardWatch) ?? true
     }
 }
 
@@ -98,7 +95,16 @@ public enum RuleEngine {
     public static func matches(_ pattern: String, url: URL) -> Bool {
         let p = pattern.trimmingCharacters(in: .whitespaces).lowercased()
         guard !p.isEmpty else { return false }
-        if p.contains("/") { return glob(p, url.absoluteString.lowercased()) }
+        if p.contains("/") {
+            let full = url.absoluteString.lowercased()
+            // Patterns rarely carry a scheme ("github.com/*/pull/*") — also
+            // glob host+path, or a scheme-less slash pattern can never
+            // match ("^github\.com/…$" vs "https://github.com/…"). Query and
+            // fragment stay out of host+path — "github.com/pulls" should
+            // still hit "https://github.com/pulls?tab=x".
+            let hostPath = ((url.host ?? "") + url.path).lowercased()
+            return glob(p, full) || glob(p, hostPath)
+        }
         guard let host = url.host?.lowercased() else { return false }
         if p.contains("*") || p.contains("?") { return glob(p, host) }
         return host == p || host.hasSuffix("." + p)
@@ -158,11 +164,15 @@ public enum BrowserOpener {
 
     /// argv passed to /usr/bin/open — pure, testable.
     ///
+    /// `foreground` selects the mode: background opens carry `-g` — a link
+    /// clicked in another app opens as a background tab without stealing
+    /// focus. Explicit picks (hotkey picker, DnD "Send to") pass
+    /// `foreground: true` so the chosen browser comes forward.
+    ///
     /// Non-profile targets use `-a <path>`: delivers the GURL to the running
-    /// instance as a normal tab and brings it forward. `-n` is deliberately
-    /// avoided — it spawns a *duplicate app instance* per link (verified on
-    /// macOS 15), and `-b` without `-n` activates the app but silently drops
-    /// the URL.
+    /// instance as a normal tab. `-n` is deliberately avoided — it spawns a
+    /// *duplicate app instance* per link (verified on macOS 15), and `-b`
+    /// without `-n` activates the app but silently drops the URL.
     ///
     /// Profile targets need `-n -b --args`: Chromium ignores
     /// `--profile-directory` on an already-running instance, and `--args`
@@ -171,18 +181,21 @@ public enum BrowserOpener {
     /// Path wrinkle: `urlForApplication` returns cryptex locations for system
     /// apps (Safari) that `open` refuses — those resolve through the
     /// /Applications stub instead.
-    public static func commandLine(url: URL, target: LinkTarget) -> [String] {
+    public static func commandLine(url: URL, target: LinkTarget,
+                                   foreground: Bool) -> [String] {
         let bid = target.browser.bundleIdentifier
         let wantProfile = supportsProfiles(target.browser)
             && !target.profile.isEmpty
+        let g = foreground ? [] : ["-g"]
         if wantProfile {
-            return ["-n", "-b", bid, "--args",
-                    "--profile-directory=\(target.profile)", url.absoluteString]
+            return g + ["-n", "-b", bid, "--args",
+                        "--profile-directory=\(target.profile)",
+                        url.absoluteString]
         }
         if let path = launchPath(for: target.browser) {
-            return ["-a", path, url.absoluteString]
+            return g + ["-a", path, url.absoluteString]
         }
-        return ["-n", "-b", bid, url.absoluteString]
+        return g + ["-n", "-b", bid, url.absoluteString]
     }
 
     /// A launchable .app path — the /Applications stub for system apps whose
@@ -195,23 +208,44 @@ public enum BrowserOpener {
         return FileManager.default.fileExists(atPath: stub) ? stub : nil
     }
 
-    public static func open(_ url: URL, target: LinkTarget) throws {
+    /// `foreground` — the destination browser activates; the default is a
+    /// background tab that leaves focus with the app the link came from.
+    public static func open(_ url: URL, target: LinkTarget,
+                            foreground: Bool = false) throws {
         guard appURL(for: target.browser) != nil else {
             throw Failure.notInstalled(target.browser.displayName)
         }
         let proc = Process()
         let err = Pipe()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        proc.arguments = commandLine(url: url, target: target)
+        proc.arguments = commandLine(url: url, target: target,
+                                   foreground: foreground)
         proc.standardError = err
+        // Drain stderr while `open` runs — reading only after waitUntilExit
+        // deadlocks if the write end fills the pipe buffer.
+        final class ErrBox: @unchecked Sendable {
+            let lock = NSLock()
+            var data = Data()
+        }
+        let box = ErrBox()
+        let reader = err.fileHandleForReading
+        reader.readabilityHandler = { h in
+            let chunk = h.availableData
+            box.lock.withLock { box.data.append(chunk) }
+        }
         try proc.run()
         proc.waitUntilExit()
+        reader.readabilityHandler = nil
+        box.lock.withLock { box.data.append(reader.readDataToEndOfFile()) }
         if proc.terminationStatus != 0 {
-            let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(),
+            let collected = box.lock.withLock { box.data }
+            let msg = String(data: collected,
                              encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw Failure.openFailed(msg ?? "open exited \(proc.terminationStatus)")
+            throw Failure.openFailed(
+                msg?.isEmpty == false ? msg!
+                    : "open exited \(proc.terminationStatus)")
         }
-        activate(target.browser)
+        if foreground { activate(target.browser) }
     }
 
     /// Bring the target browser forward — profile launches use `-n`, which
@@ -291,21 +325,17 @@ public enum FrontmostTab {
             // Safari AppleScript has no private-window flag. The Safari app
             // extension handles normal tabs after checking that flag.
             return nil
-        case .chrome, .brave:
+        case .chrome, .brave, .edge, .vivaldi, .arc, .opera, .chromium:
             // Window mode distinguishes normal/incognito in the Chromium
             // scripting dictionary (verified in Chrome + Brave sdefs) — a
-            // private tab must never be moved into another browser's history.
+            // private tab must never be moved into another browser's
+            // history. Where a browser's dictionary lacks `mode` the script
+            // errors and we fail closed (.unavailable) rather than risk
+            // leaking a private tab.
             return """
                 tell application id "\(kind.bundleIdentifier)"
                     if (count of windows) is 0 then return ""
                     if (mode of front window) is not "normal" then return ""
-                    return URL of active tab of front window
-                end tell
-                """
-        case .edge, .vivaldi, .arc, .opera, .chromium:
-            return """
-                tell application id "\(kind.bundleIdentifier)"
-                    if (count of windows) is 0 then return ""
                     return URL of active tab of front window
                 end tell
                 """

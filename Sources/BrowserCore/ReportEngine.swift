@@ -483,9 +483,11 @@ public struct ReportEngine: Sendable {
                 if let p = prev {
                     let diff = Int64(date.timeIntervalSince(p) / 86400)
                     streak = diff == 1 ? streak + 1 : 1
-                    r.longestStreak = max(r.longestStreak, streak)
                     gap = max(gap, diff - 1)
                 }
+                // Outside the prev check — one active day is still a
+                // streak of 1.
+                r.longestStreak = max(r.longestStreak, streak)
                 prev = date
             }
             r.longestGapDays = gap
@@ -832,7 +834,7 @@ public struct ReportEngine: Sendable {
 
     public func attentionApps(sinceDays: Int = 0) throws -> [Count] {
         try db.query("""
-            SELECT app, SUM(active_s) a, SUM(ticks)*2.0 o
+            SELECT app, SUM(active_s) a, SUM(ticks)*\(FocusWatcher.interval) o
             FROM focus\(focusWhere(sinceDays))
             GROUP BY app ORDER BY a DESC LIMIT 15
         """).map {
@@ -852,7 +854,7 @@ public struct ReportEngine: Sendable {
         public var ticks: Int64
     }
 
-    /// Raw focus segments for a UTC day (yyyy-MM-dd) — the timeline view.
+    /// Raw focus segments for a local day (yyyy-MM-dd) — the timeline view.
     public func focusSegments(day: String) throws -> [FocusSegRow] {
         try db.query("""
             SELECT id, start_utc, end_utc, app, url, active_s, ticks
@@ -947,7 +949,7 @@ public struct ReportEngine: Sendable {
     /// Per-app totals: active vs open vs segment count vs longest span.
     public func attentionAppsDetailed(sinceDays: Int = 0) throws -> [Count] {
         try db.query("""
-            SELECT app, SUM(active_s) a, SUM(ticks)*2.0 o,
+            SELECT app, SUM(active_s) a, SUM(ticks)*\(FocusWatcher.interval) o,
                    COUNT(*) n, MAX(active_s) longest
             FROM focus\(focusWhere(sinceDays)) GROUP BY app ORDER BY a DESC
         """).map {
@@ -962,7 +964,7 @@ public struct ReportEngine: Sendable {
     /// Per-site totals with open-vs-active split.
     public func attentionSitesDetailed(sinceDays: Int = 0) throws -> [Count] {
         try db.query("""
-            SELECT \(Self.hostSQL) h, SUM(active_s) a, SUM(ticks)*2.0 o,
+            SELECT \(Self.hostSQL) h, SUM(active_s) a, SUM(ticks)*\(FocusWatcher.interval) o,
                    COUNT(*) n
             FROM focus WHERE url != ''\(focusAnd(sinceDays))
             GROUP BY h ORDER BY a DESC LIMIT 20

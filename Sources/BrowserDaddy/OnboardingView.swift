@@ -67,8 +67,9 @@ struct OnboardingView: View {
             row(
                 ok: true,
                 title: "Browser automation",
-                body: "Chrome tab capture checks for a normal window before reading URLs. "
-                      + "Other browsers record app-level time only; private status is unverified.",
+                body: "Chromium-family tab capture verifies a normal window before "
+                      + "reading URLs. Browsers that can't prove window mode record "
+                      + "app-level time only.",
                 actionTitle: nil, action: nil)
         }
     }

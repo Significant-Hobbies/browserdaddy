@@ -136,7 +136,9 @@ final class SafariTabsHandler: SFSafariExtensionHandler {
               let data = try? JSONEncoder().encode(
                 SafariTabActionResult(requestID: requestID, applied: applied))
         else { return }
-        try? data.write(to: root.appendingPathComponent(SafariTabWire.actionFileName),
-                        options: .atomic)
+        try? data.write(
+            to: root.appendingPathComponent(
+                SafariTabWire.actionFileName(requestID: requestID)),
+            options: .atomic)
     }
 }

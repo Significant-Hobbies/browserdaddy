@@ -69,11 +69,12 @@ struct PermissionsView: View {
 
     private var automation: some View {
         BrowserBand(label: "TABS",
-                    subtitle: "Chrome Automation and Safari extension access") {
+                    subtitle: "Browser automation and Safari extension access") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Chrome tabs come from verified normal windows. Safari tabs "
-                     + "come from its optional extension, which excludes Private Browsing "
-                     + "before sharing URLs. Other browsers remain app-only.")
+                Text("Chromium-family tabs are read only from windows verified "
+                     + "as normal. Safari tabs come from its optional extension, "
+                     + "which excludes Private Browsing before sharing URLs. "
+                     + "Anything unverifiable stays app-only.")
                     .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                 ForEach(FocusWatcher.tabCapableBrowsers.values.sorted(),
                         id: \.self) { name in

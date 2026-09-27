@@ -7,22 +7,30 @@ public enum Permissions {
         case granted, denied, notRunning, unknown
     }
 
-    /// Per-browser Automation consent. NSRunningApplication avoids scripting
-    /// System Events; the browser probe runs only when that exact app is open.
+    /// Per-browser Automation consent. Asks the AE permission API rather
+    /// than running a probe script — a status check must not fire consent
+    /// prompts just because the Permissions page opened. `scriptName` is
+    /// unused today; kept as the display key callers store state under.
     public static func automationState(
-        bundleID: String, scriptName: String
+        bundleID: String, scriptName _: String
     ) -> AutomationState {
-        guard !NSRunningApplication.runningApplications(
-            withBundleIdentifier: bundleID).isEmpty else { return .notRunning }
-
-        let probe = NSAppleScript(source: """
-            tell application "\(scriptName)" to count windows
-        """)
-        var probeErr: NSDictionary?
-        _ = probe?.executeAndReturnError(&probeErr)
-        guard let e = probeErr else { return .granted }
-        let code = e[NSAppleScript.errorNumber] as? Int ?? 0
-        return code == -1743 ? .denied : .granted  // -1719 no window = granted
+        guard let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: bundleID).first else { return .notRunning }
+        let address = NSAppleEventDescriptor(
+            processIdentifier: running.processIdentifier)
+        let status = withExtendedLifetime(address) {
+            AEDeterminePermissionToAutomateTarget(
+                address.aeDesc, AEEventClass(typeWildCard),
+                AEEventID(typeWildCard), false)
+        }
+        switch status {
+        case noErr: return .granted
+        case OSStatus(errAEEventNotPermitted): return .denied
+        case OSStatus(procNotFound): return .notRunning
+        // Would-require-consent and everything else: undecided/unknown —
+        // the UI's "Allow" button asks explicitly.
+        default: return .unknown
+        }
     }
 
     public static func openAutomationSettings() {

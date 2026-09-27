@@ -32,6 +32,30 @@ final class LinkRouterTests: XCTestCase {
             url: url("https://github.com/o/r/issues/1")))
     }
 
+    /// A "host/path" pattern without a scheme or wildcard must still match —
+    /// otherwise it's silently dead against https://-prefixed URLs.
+    func testSlashPatternWithoutSchemeMatchesHostPath() {
+        XCTAssertTrue(RuleEngine.matches("github.com/o/r/pull/*",
+            url: url("https://github.com/o/r/pull/123")))
+        XCTAssertTrue(RuleEngine.matches("github.com/o/r/pull/*",
+            url: url("http://github.com/o/r/pull/123?x=1")))
+        XCTAssertFalse(RuleEngine.matches("github.com/o/r/pull/*",
+            url: url("https://github.com/o/r/issues/1")))
+        XCTAssertFalse(RuleEngine.matches("github.com/o/r/pull/*",
+            url: url("https://sub.github.com/o/r/pull/123")))
+    }
+
+    /// Query/fragment belong to the full-URL glob, not host+path — a bare
+    /// path pattern must still hit a URL carrying a query.
+    func testSlashPatternIgnoresQueryAndFragment() {
+        XCTAssertTrue(RuleEngine.matches("github.com/pulls",
+            url: url("https://github.com/pulls?tab=files")))
+        XCTAssertTrue(RuleEngine.matches("github.com/pulls",
+            url: url("https://github.com/pulls#top")))
+        XCTAssertFalse(RuleEngine.matches("github.com/pulls",
+            url: url("https://github.com/pullsxyz")))
+    }
+
     func testMatchingIsCaseInsensitiveAndOrdered() {
         let rules = [
             RouteRule(pattern: "apple.com", target: LinkTarget(browser: .safari)),
@@ -53,17 +77,34 @@ final class LinkRouterTests: XCTestCase {
     func testChromiumProfileArgv() {
         let argv = BrowserOpener.commandLine(
             url: url("https://a.dev"),
-            target: LinkTarget(browser: .chrome, profile: "Profile 1"))
-        XCTAssertEqual(argv, ["-n", "-b", "com.google.Chrome", "--args",
+            target: LinkTarget(browser: .chrome, profile: "Profile 1"),
+            foreground: false)
+        XCTAssertEqual(argv, ["-g", "-n", "-b", "com.google.Chrome", "--args",
                               "--profile-directory=Profile 1", "https://a.dev"])
     }
 
     /// Non-profile targets use `-a <path>` — `-n` spawns a duplicate app
-    /// instance per link and `-b` alone silently drops the URL.
+    /// instance per link and `-b` alone silently drops the URL. `-g` keeps
+    /// the destination browser in the background (routed links must not
+    /// steal focus).
     func testNoProfileArgv() {
         let argv = BrowserOpener.commandLine(
-            url: url("https://a.dev"), target: LinkTarget(browser: .chrome))
-        XCTAssertEqual(argv.first, "-a")
+            url: url("https://a.dev"), target: LinkTarget(browser: .chrome),
+            foreground: false)
+        XCTAssertEqual(argv[0], "-g")
+        XCTAssertEqual(argv[1], "-a")
+        XCTAssertTrue(argv[2].hasSuffix("Google Chrome.app"))
+        XCTAssertEqual(argv.last, "https://a.dev")
+    }
+
+    /// Foreground opens (explicit picks) drop `-g` so the chosen browser
+    /// comes forward.
+    func testForegroundArgvDropsBackgroundFlag() {
+        let argv = BrowserOpener.commandLine(
+            url: url("https://a.dev"), target: LinkTarget(browser: .chrome),
+            foreground: true)
+        XCTAssertFalse(argv.contains("-g"))
+        XCTAssertEqual(argv[0], "-a")
         XCTAssertTrue(argv[1].hasSuffix("Google Chrome.app"))
         XCTAssertEqual(argv.last, "https://a.dev")
     }
@@ -73,9 +114,11 @@ final class LinkRouterTests: XCTestCase {
     func testSafariUsesApplicationsStub() {
         let argv = BrowserOpener.commandLine(
             url: url("https://a.dev"),
-            target: LinkTarget(browser: .safari, profile: "Work"))
-        XCTAssertEqual(argv.first, "-a")
-        XCTAssertEqual(argv[1], "/Applications/Safari.app")
+            target: LinkTarget(browser: .safari, profile: "Work"),
+            foreground: false)
+        XCTAssertEqual(argv[0], "-g")
+        XCTAssertEqual(argv[1], "-a")
+        XCTAssertEqual(argv[2], "/Applications/Safari.app")
         XCTAssertEqual(argv.last, "https://a.dev")
     }
 

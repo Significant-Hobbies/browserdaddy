@@ -63,7 +63,7 @@ public final class ArchiveStore: @unchecked Sendable {
     private func ensureColumn(_ table: String, _ column: String) {
         let cols = (try? db.query("PRAGMA table_info(\(table))")) ?? []
         if !cols.contains(where: { $0["name"]?.text == column }) {
-            try? db.execute(
+            _ = try? db.execute(
                 "ALTER TABLE \(table) ADD COLUMN \(column) TEXT DEFAULT 'auto'")
         }
     }
@@ -86,7 +86,7 @@ public final class ArchiveStore: @unchecked Sendable {
             FROM visits GROUP BY h
         """).compactMap { $0["h"]?.text }
             .filter { Domain.rollup($0) == rollup }
-        try db.transaction {
+        try db.writeTransaction {
             for h in hosts {
                 try db.execute("""
                     INSERT OR REPLACE INTO domain_categories
@@ -114,7 +114,7 @@ public final class ArchiveStore: @unchecked Sendable {
         let hosts = try db.query("SELECT host FROM domain_categories")
             .compactMap { $0["host"]?.text }
             .filter { Domain.rollup($0) == rollup }
-        try db.transaction {
+        try db.writeTransaction {
             for host in hosts {
                 try db.execute("DELETE FROM domain_categories WHERE host = ?", [.text(host)])
             }
@@ -127,7 +127,7 @@ public final class ArchiveStore: @unchecked Sendable {
                         [.text(key)], as: { $0.text })) ?? nil
     }
     public func metaSet(_ key: String, _ value: String) {
-        try? db.execute(
+        _ = try? db.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)",
             [.text(key), .text(value)])
     }
@@ -135,9 +135,8 @@ public final class ArchiveStore: @unchecked Sendable {
     /// INSERT OR IGNORE; returns count actually inserted.
     @discardableResult
     public func merge(visits: [HistoryVisit], source: HistorySource) throws -> Int {
-        try db.transaction {
+        try db.writeTransaction {
             var inserted = 0
-            try db.execute("BEGIN")
             for v in visits {
                 inserted += try db.execute("""
                     INSERT OR IGNORE INTO visits
@@ -153,7 +152,6 @@ public final class ArchiveStore: @unchecked Sendable {
                      v.duration.map(DBValue.double) ?? .null,
                      v.fromVisit.map(DBValue.int) ?? .null])
             }
-            try db.execute("COMMIT")
             return inserted
         }
     }
@@ -161,9 +159,8 @@ public final class ArchiveStore: @unchecked Sendable {
     @discardableResult
     public func merge(searches: [(term: String, url: String, title: String)],
                       source: HistorySource) throws -> Int {
-        try db.transaction {
+        try db.writeTransaction {
             var inserted = 0
-            try db.execute("BEGIN")
             for s in searches {
                 inserted += try db.execute("""
                     INSERT OR IGNORE INTO searches
@@ -172,7 +169,6 @@ public final class ArchiveStore: @unchecked Sendable {
                     [.text(source.browser), .text(source.profile), .text(s.term),
                      .text(s.url), .text(s.title)])
             }
-            try db.execute("COMMIT")
             return inserted
         }
     }

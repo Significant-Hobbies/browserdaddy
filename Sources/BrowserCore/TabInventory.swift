@@ -40,9 +40,11 @@ public enum TabSourceState: Equatable, Sendable {
 }
 
 /// Enumerates and manipulates open tabs across scriptable browsers via
-/// AppleScript. Incognito windows are filtered where the browser exposes a
-/// window mode (verified: Chrome, Brave). Safari is handled by its native
-/// extension, which checks the page's Private Browsing flag before sharing.
+/// AppleScript. Incognito windows are filtered via the Chromium window mode
+/// (verified on Chrome and Brave; requested for every Chromium-family sdef —
+/// where `mode` is missing the script errors and the caller fails closed).
+/// Safari is handled by its native extension, which checks the page's
+/// Private Browsing flag before sharing.
 public enum TabInventory {
     private static let fs = "\u{1f}"  // unit separator, same as FocusWatcher
 
@@ -178,20 +180,17 @@ public enum TabInventory {
                         end try
                     end repeat
             """
-        // Chrome/Brave expose window mode — skip anything that isn't normal.
-        let loop = (kind == .chrome || kind == .brave)
-            ? """
-                repeat with w from 1 to (count of windows)
-                    if (mode of window w) is "normal" then
-            \(body)
-                    end if
-                end repeat
-            """
-            : """
-                repeat with w from 1 to (count of windows)
-            \(body)
-                end repeat
-            """
+        // Every kind reaching this point is Chromium-family — its sdef
+        // ships the window `mode` property, so anything that isn't normal
+        // (incognito) is skipped. A dictionary without `mode` makes the
+        // whole script error, which fails closed in `state(for:)`.
+        let loop = """
+            repeat with w from 1 to (count of windows)
+                if (mode of window w) is "normal" then
+        \(body)
+                end if
+            end repeat
+        """
         return """
             tell application id "\(kind.bundleIdentifier)"
                 set s to (ASCII character 31)

@@ -39,7 +39,6 @@ struct DailyStackedBars: View {
             GeometryReader { g in
                 HStack(alignment: .bottom, spacing: 1) {
                     ForEach(Array(days.enumerated()), id: \.offset) { i, d in
-                        let total = byDay[d, default: [:]].values.reduce(0, +)
                         VStack(spacing: 0) {
                             Spacer(minLength: 0)
                             ForEach(browsers, id: \.self) { b in

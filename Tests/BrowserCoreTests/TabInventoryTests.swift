@@ -20,6 +20,17 @@ final class TabInventoryTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0)
     }
 
+    func testEveryChromiumInventoryScriptFiltersNonNormalWindows() {
+        for kind in [BrowserKind.chrome, .brave, .edge, .vivaldi, .arc,
+                     .opera, .chromium] {
+            let source = TabInventory.listScript(kind: kind)
+            XCTAssertNotNil(source, kind.displayName)
+            XCTAssertTrue(
+                source?.contains("mode of window w") ?? false,
+                "\(kind.displayName) inventory lacks the incognito window filter")
+        }
+    }
+
     func testSafariPrivateAndUnknownPagesNeverBecomeEntries() {
         let url = URL(string: "https://example.com/private")!
         XCTAssertNil(SafariTabWire.regularEntry(window: 1, index: 1,

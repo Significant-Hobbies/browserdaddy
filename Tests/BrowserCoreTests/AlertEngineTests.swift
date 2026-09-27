@@ -81,6 +81,31 @@ final class AlertEngineTests: XCTestCase {
         XCTAssertTrue(d.box[0].1.contains("fixture.example"))
     }
 
+    /// A cap on the registrable host must count subdomain focus rows —
+    /// focus URLs record the literal host ("www.youtube.com"), and a
+    /// "youtube.com" cap that only matched exactly would never fire.
+    func testSiteCapCoversSubdomainsButNotLookalikes() throws {
+        let d = Deliveries()
+        let e = engine(delivered: d)
+        var cfg = AlertConfig()
+        cfg.enabled = true
+        cfg.siteCaps = ["fixture.example": 1, "other.example": 1]
+        e.saveConfig(cfg)
+        try focus("Brave Browser", "https://www.fixture.example/page",
+                  start: Date().addingTimeInterval(-300),
+                  end: Date(), ticks: 150, active: 90)
+        // Lookalike suffix must not count toward the cap.
+        try focus("Brave Browser", "https://notfixture.example/page",
+                  start: Date().addingTimeInterval(-600),
+                  end: Date().addingTimeInterval(-400), ticks: 100, active: 120)
+        try focus("Brave Browser", "https://another.example/page",
+                  start: Date().addingTimeInterval(-900),
+                  end: Date().addingTimeInterval(-800), ticks: 50, active: 60)
+        e.evaluate()
+        XCTAssertEqual(d.box.count, 1)
+        XCTAssertTrue(d.box[0].1.contains("fixture.example"))
+    }
+
     func testStreakFiresOnlyForStillOpenSegment() throws {
         let d = Deliveries()
         let e = engine(delivered: d)

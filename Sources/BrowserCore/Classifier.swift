@@ -79,7 +79,7 @@ public struct Classifier: Sendable {
             }
             let pairs = try await classify(texts: inputs,
                                    labels: Self.domainLabels, log: log)
-            try db.transaction {
+            try db.writeTransaction {
                 try Task.checkCancellation()
                 for (i, p) in pairs.enumerated() {
                     try db.execute("""
@@ -108,7 +108,7 @@ public struct Classifier: Sendable {
         if !newPages.isEmpty {
             let pairs = try await classify(texts: newPages.map(\.1),
                                    labels: Self.pageLabels, log: log)
-            try db.transaction {
+            try db.writeTransaction {
                 try Task.checkCancellation()
                 for (i, p) in pairs.enumerated() {
                     try db.execute("""

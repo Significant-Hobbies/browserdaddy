@@ -40,7 +40,11 @@ public final class SQLiteStore: @unchecked Sendable {
         let flags = readOnly
             ? SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
             : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI
-        let path = readOnly ? "file:\(url.path)?mode=ro" : url.path
+        // URI form needs a percent-escaped path — a bare '?' or '#' in a
+        // profile dir name would corrupt the query string.
+        let escaped = url.path.addingPercentEncoding(
+            withAllowedCharacters: .urlPathAllowed) ?? url.path
+        let path = readOnly ? "file:\(escaped)?mode=ro" : url.path
         var handle: OpaquePointer?
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
             defer { sqlite3_close(handle) }
@@ -48,8 +52,8 @@ public final class SQLiteStore: @unchecked Sendable {
         }
         db = handle
         if !readOnly {
-            try? execute("PRAGMA journal_mode=WAL")
-            try? execute("PRAGMA synchronous=NORMAL")
+            _ = try? execute("PRAGMA journal_mode=WAL")
+            _ = try? execute("PRAGMA synchronous=NORMAL")
         }
     }
 
@@ -84,7 +88,14 @@ public final class SQLiteStore: @unchecked Sendable {
         try bind(stmt, params)
         var out: [[String: DBValue]] = []
         let ncols = sqlite3_column_count(stmt)
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        while true {
+            let rc = sqlite3_step(stmt)
+            if rc == SQLITE_DONE { break }
+            // BUSY/IOERR/SCHEMA mid-iteration must surface — treating them
+            // as DONE would return a silently truncated result set.
+            guard rc == SQLITE_ROW else {
+                throw DBError(message: lastError(sql))
+            }
             var row: [String: DBValue] = [:]
             for i in 0..<ncols {
                 let name = String(cString: sqlite3_column_name(stmt, i))
@@ -121,13 +132,32 @@ public final class SQLiteStore: @unchecked Sendable {
         }
     }
 
+    /// Runs `body` inside BEGIN IMMEDIATE … COMMIT while holding the lock.
+    /// Rolls back if `body` throws — otherwise a mid-write error leaves an
+    /// open transaction that stalls every later write on this connection.
+    public func writeTransaction<T>(_ body: () throws -> T) throws -> T {
+        try transaction {
+            try execute("BEGIN IMMEDIATE")
+            do {
+                let result = try body()
+                try execute("COMMIT")
+                return result
+            } catch {
+                _ = try? execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
     private func value(_ stmt: OpaquePointer?, _ col: Int32) -> DBValue {
         switch sqlite3_column_type(stmt, col) {
         case SQLITE_INTEGER: return .int(sqlite3_column_int64(stmt, col))
         case SQLITE_FLOAT: return .double(sqlite3_column_double(stmt, col))
+        case SQLITE_BLOB: return .null  // no blob columns in our schemas
         case SQLITE_NULL: return .null
         default:
-            return .text(String(cString: sqlite3_column_text(stmt, col)))
+            guard let ptr = sqlite3_column_text(stmt, col) else { return .null }
+            return .text(String(cString: ptr))
         }
     }
 

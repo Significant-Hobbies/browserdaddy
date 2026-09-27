@@ -14,7 +14,8 @@ public struct AlertConfig: Codable, Equatable, Sendable {
     /// human attention, since agent segments carry ~zero active_s. 0 = off.
     public var agentMinutes = 0
     /// host (e.g. "youtube.com") → focused minutes per day. Only browsers
-    /// with captured tab URLs can accrue site time (Chrome today).
+    /// with captured tab URLs can accrue site time (the Chromium family —
+    /// anything that can prove the focused window isn't private).
     public var siteCaps: [String: Int] = [:]
 
     public init() {}
@@ -90,12 +91,18 @@ public final class AlertEngine: @unchecked Sendable {
 
         for (host, mins) in cfg.siteCaps where mins > 0 {
             let key = "site:\(host)"
+            // Caps cover the whole site: a "youtube.com" cap must count
+            // "www.youtube.com" too — suffix match, never a bare substring
+            // ("notyoutube.com" doesn't end in ".youtube.com").
             guard !already.contains(key),
                   let active = try? store.db.scalar("""
                       SELECT SUM(active_s) FROM focus
                       WHERE strftime('%Y-%m-%d',start_utc,'localtime') = ?
-                        AND \(ReportEngine.hostSQL) = ?
-                      """, [.text(day), .text(host)], as: { $0.double }),
+                        AND (\(ReportEngine.hostSQL) = ?
+                          OR substr(\(ReportEngine.hostSQL), -(length(?) + 1))
+                             = '.' || ?)
+                      """, [.text(day), .text(host), .text(host), .text(host)],
+                      as: { $0.double }),
                   active >= Double(mins) * 60 else { continue }
             fires.append((key, "Site cap reached",
                           "\(Int(active / 60)) focused minutes on \(host) today "

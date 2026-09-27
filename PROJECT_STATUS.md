@@ -1,5 +1,78 @@
 # BrowserDaddy — project status
 
+## 2026-09-27 — URL-handler launches stay windowless (local, unreleased)
+
+Clicking a link registered to BrowserDaddy no longer flashes the main
+window: the WindowGroup carries `.defaultLaunchBehavior(.suppressed)`, so
+a GURL launch is purely a routing pipe. `openWindow` is captured eagerly
+from the menubar icon (the only eagerly-rendered view) since the main
+window may never exist — Dock/⌘-tab reopen and the menu's "Open
+BrowserDaddy" still create it. Links that arrive while the UI is already
+up (e.g. History's "Open URL") no longer hide the app — UI state is
+snapshotted at URL receipt and only launch-created surfaces are torn
+down. A 3s window after each URL event suppresses racing reopen events.
+Deployment floor moved to macOS 15 (the suppression API's requirement —
+SceneBuilder can't branch on runtime availability).
+
+Routed links also open as *background tabs* — `/usr/bin/open` now carries
+`-g` on every silent route so the destination browser never comes
+forward. Explicit picks keep foreground behavior (`BrowserOpener.open`'s
+`foreground:` flag — hotkey picker, DnD "Send to"). Since a background
+route plus LaunchServices' delivery-activation would strand focus on a
+windowless handler, the last non-self frontmost app is tracked
+(seeded at launch — the clicker predates us — and kept fresh via
+didActivateApplicationNotification) and re-activated after routing.
+`keySenderPIDAttr` is absent on LS-delivered GURLs, so activation history
+is the fallback. Verified live: cold launch 0 windows, GURL 0 windows
+and focus back in the clicker, reopen 1 window, GURL-with-window keeps
+the window. 59 tests green; build warning-free.
+
+Invisible-after-setup: the clipboard watcher (passive picker on every URL
+copy) is gone — the picker now only exists for explicit invocations
+(⌃⌥O, ⌃⌥Space, menu). `clipboardWatch` dropped from RouterConfig (old
+stored configs ignore it); the panel's passive mode removed with it. One
+launch-window exception: an un-onboarded app opens its window ~1s after
+launch so first-run setup is reachable; once `onboarded=1` nothing ever
+surfaces on its own.
+
+## 2026-09-27 — deep audit pass 2 (local, unreleased)
+
+Continued the bug sweep into the last unreviewed surfaces. FocusWatcher's
+private-window gate now covers every Chromium browser (was Chrome-only —
+Brave/Edge/Vivaldi/Arc/Opera/Chromium focus was app-only despite their
+sdefs exposing `mode`; scripts still fail closed where `mode` is absent).
+Permission probes switched to `AEDeterminePermissionToAutomateTarget`
+non-interactively — a `count windows` AppleScript probe could have fired
+consent prompts for every running Chromium browser just by opening
+Permissions. Safari tab actions now write per-request result files
+(two rapid close/focus ops previously overwrote each other's result and
+the loser timed out with "did not confirm" after the tab already closed).
+Site-cap alerts match subdomains (`youtube.com` cap counts
+`www.youtube.com`; lookalikes like `notyoutube.com` don't match) and the
+Add field accepts pasted URLs, normalized to host[:port]. Classifier tag
+writes moved into `writeTransaction` (atomic, rollback on mid-batch
+cancel/error). Route patterns with a path segment ignore query/fragment
+on the host+path glob. Stale copy fixed in Onboarding/Permissions/Alerts
+to reflect Chromium-family coverage. 58 tests green; build warning-free.
+
+## 2026-09-27 — clipboard-focus bugfix pass (local, unreleased)
+
+Owner report: copying a link sometimes opened a browser on its own. Root
+cause: the clipboard watcher showed the picker with `NSApp.activate()` and
+key status, so the next keystroke (⏎/digit — modifiers ignored, so even ⌘1)
+silently confirmed a target. The picker also spawned under the pointer.
+Fix: picker is now modal-split — clipboard-driven shows are passive
+(non-activating, non-key, top-of-screen, click-only, auto-dismiss) while
+⌃⌥O/⌃⌥Space keep the interactive keyboard flow. Other fixes in the same
+pass: self-triggering Copy-URL buttons, `BrowserOpener` stderr-pipe
+deadlock, `closeTabs` index-shift (now closes descending), scheme-less
+slash route patterns, incognito `mode` filter extended to all
+Chromium-family tab scripts, SQLite step-error/null/URI-escaping fixes,
+`BEGIN`-leak rollbacks via `writeTransaction`, legacy Python archive
+importer wired into `runExtract`, 1-day streak counting, empty-frontmost
+focus rows, and hardcoded tick intervals. 62 tests green; `swift build`
+warning-free.
+
 ## 2026-09-26 — 0.4.6 build 15: background routing and Safari tabs
 
 Clicked HTTP(S) links still use ordered rules and fallback, but launch as a

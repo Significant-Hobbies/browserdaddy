@@ -101,6 +101,8 @@ public final class FocusWatcher: @unchecked Sendable {
 
     private func transition(to app: String, url: String, title: String,
                             dt: TimeInterval, active: Bool) {
+        // No frontmost app is a gap, not an app — never write a "" row.
+        guard !app.isEmpty else { closeSegment(); return }
         if current == nil {
             openSegment(app: app, url: url, title: title)
         } else if current!.app != app || current!.url != url {
@@ -129,7 +131,7 @@ public final class FocusWatcher: @unchecked Sendable {
 
     private func bump(dt: TimeInterval) {
         guard let id = current?.id else { return }
-        try? store.db.execute("""
+        _ = try? store.db.execute("""
             UPDATE focus SET end_utc=?, ticks=ticks+1, active_s=active_s+?
             WHERE id=?
         """,
@@ -139,7 +141,7 @@ public final class FocusWatcher: @unchecked Sendable {
     private func closeSegment() {
         guard let id = current?.id else { return }
         // drop blips: segments that never survived one poll
-        try? store.db.execute("DELETE FROM focus WHERE id=? AND ticks=0",
+        _ = try? store.db.execute("DELETE FROM focus WHERE id=? AND ticks=0",
                               [.int(id)])
         current = nil
     }
@@ -150,12 +152,19 @@ public final class FocusWatcher: @unchecked Sendable {
             .combinedSessionState, eventType: anyInput)
     }
 
-    /// Chrome's scripting dictionary exposes an immutable normal/incognito
-    /// window mode. Other browsers remain app-only until similarly qualified.
+    /// Chromium-family dictionaries expose an immutable normal/incognito
+    /// window `mode`; where a browser's dictionary lacks it the script
+    /// errors and the poll records app-only focus — a private URL is never
+    /// carried into the archive.
     static func tabScript(bundleID: String) -> String? {
-        guard bundleID == "com.google.Chrome" else { return nil }
+        let chromium: Set<String> = [
+            "com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac",
+            "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
+            "com.operasoftware.Opera", "org.chromium.Chromium",
+        ]
+        guard chromium.contains(bundleID) else { return nil }
         return """
-            tell application id "com.google.Chrome"
+            tell application id "\(bundleID)"
                 if (count of windows) is 0 then return ""
                 set captureWindow to front window
                 if (mode of captureWindow) is not "normal" then return ""

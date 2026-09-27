@@ -8,7 +8,11 @@ public enum SafariTabWire {
         hostBundleID + ".safaritabs"
     }
     public static let fileName = "safari-tabs.json"
-    public static let actionFileName = "safari-tab-action.json"
+    /// Results are per-request — a shared file would let a later action
+    /// overwrite an earlier result before the app reads it.
+    public static func actionFileName(requestID: String) -> String {
+        "safari-tab-action-\(requestID).json"
+    }
 
     /// Unknown privacy state is excluded, just like Private Browsing.
     public static func regularEntry(window: Int, index: Int,

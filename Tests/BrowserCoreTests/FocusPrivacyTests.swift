@@ -27,19 +27,50 @@ final class FocusPrivacyTests: XCTestCase {
         XCTAssertEqual(Array(visibleURLs.suffix(3)), ["", "", ""])
     }
 
-    func testUnqualifiedBrowsersNeverReceiveTabQuery() {
-        for id in FocusWatcher.scriptableBrowsers.keys where id != "com.google.Chrome" {
-            XCTAssertNil(FocusWatcher.tabScript(bundleID: id), id)
+    func testMissingFrontmostAppClosesSegmentWithoutWritingEmptyRow() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BrowserDaddy-gap-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ArchiveStore(url: directory.appendingPathComponent("fixture.db"))
+        let watcher = FocusWatcher(store: store)
+        for _ in 0..<2 {
+            watcher.recordCapture(app: "Chrome", url: "https://fixture.example/",
+                                  title: "Public", dt: 2, active: true)
         }
-        XCTAssertNil(FocusWatcher.tabScript(bundleID: "unknown.browser"))
+        watcher.recordCapture(app: "", url: "", title: "", dt: 2, active: false)
+        watcher.recordCapture(app: "", url: "", title: "", dt: 2, active: false)
+        let rows = try store.db.query("SELECT app FROM focus ORDER BY id")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0]["app"]?.text, "Chrome")
     }
 
-    func testChromePrivacyGatePrecedesTabRead() throws {
-        let script = try XCTUnwrap(FocusWatcher.tabScript(bundleID: "com.google.Chrome"))
-        let gate = try XCTUnwrap(script.range(of: "if (mode of captureWindow) is not \"normal\" then return \"\""))
-        let read = try XCTUnwrap(script.range(of: "set captureTab to active tab of captureWindow"))
-        XCTAssertLessThan(gate.lowerBound, read.lowerBound)
-        XCTAssertNotNil(NSAppleScript(source: script))
+    /// Safari/Firefox can't prove window privacy state through AppleScript —
+    /// they get no tab query at all (app-only focus).
+    func testUnverifiableBrowsersNeverReceiveTabQuery() {
+        for id in ["com.apple.Safari", "org.mozilla.firefox", "unknown.browser"] {
+            XCTAssertNil(FocusWatcher.tabScript(bundleID: id), id)
+        }
+    }
+
+    /// Every Chromium-family browser gets the same window-mode gate — the
+    /// check must precede the tab read in each generated script.
+    func testChromiumPrivacyGatePrecedesTabRead() throws {
+        let chromium = [
+            "com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac",
+            "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
+            "com.operasoftware.Opera", "org.chromium.Chromium",
+        ]
+        for id in chromium {
+            let script = try XCTUnwrap(FocusWatcher.tabScript(bundleID: id), id)
+            XCTAssertTrue(script.contains("tell application id \"\(id)\""), id)
+            let gate = try XCTUnwrap(
+                script.range(of: "if (mode of captureWindow) is not \"normal\" then return \"\""), id)
+            let read = try XCTUnwrap(
+                script.range(of: "set captureTab to active tab of captureWindow"), id)
+            XCTAssertLessThan(gate.lowerBound, read.lowerBound, id)
+            XCTAssertNotNil(NSAppleScript(source: script), id)
+        }
     }
 
     func testUnavailableOrMalformedCaptureNeverRetainsTabData() {

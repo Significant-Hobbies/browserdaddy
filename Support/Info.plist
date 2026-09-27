@@ -2,47 +2,47 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleDisplayName</key>
-    <string>BrowserDaddy</string>
-    <key>CFBundleExecutable</key>
-    <string>BrowserDaddy</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.significanthobbies.browserdaddy.dev</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>BrowserDaddy</string>
-    <key>CFBundleIconFile</key>
-    <string>BrowserDaddy</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>Web URL</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>http</string>
-                <string>https</string>
-            </array>
-        </dict>
-    </array>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.utilities</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>BrowserDaddy reads the active tab in normal Chrome windows to measure browsing attention, and in the frontmost browser when you ask to move a tab to another browser. Incognito tab details are excluded.</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>BrowserDaddy</string>
+	<key>CFBundleExecutable</key>
+	<string>BrowserDaddy</string>
+	<key>CFBundleIconFile</key>
+	<string>BrowserDaddy</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.significanthobbies.browserdaddy.dev</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>BrowserDaddy</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>BrowserDaddy reads the active tab in normal Chrome windows to measure browsing attention, and in the frontmost browser when you ask to move a tab to another browser. Incognito tab details are excluded.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>

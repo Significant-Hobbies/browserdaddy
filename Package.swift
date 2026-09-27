@@ -7,7 +7,10 @@ let sparkleTestFrameworks = URL(fileURLWithPath: #filePath).deletingLastPathComp
 
 let package = Package(
     name: "BrowserDaddy",
-    platforms: [.macOS(.v14)],
+    // v15 floor: Scene.defaultLaunchBehavior(.suppressed) needs 15 —
+    // the URL-handler route must never flash a window (SceneBuilder
+    // cannot branch on runtime availability).
+    platforms: [.macOS(.v15)],
     products: [
         .library(name: "BrowserCore", targets: ["BrowserCore"]),
         .executable(name: "BrowserDaddy", targets: ["BrowserDaddy"]),

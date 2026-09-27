@@ -17,11 +17,37 @@ final class LinkRouterService: NSObject {
     let picker = LinkPickerPanelController()
     private var pendingURL: URL?
     private var installed = false
-    private var lastSuccessfulRouteAt: Date?
+    /// Last GURL receipt — set before routing, so a reopen event racing in
+    /// while the link is still being forwarded also stays windowless.
+    private var lastURLEventAt: Date?
+    /// UI state at the moment the last link arrived — a window that was
+    /// already up is the user's surface, not launch debris, and stays.
+    private var hadUIWhenURLEventArrived = false
+    /// The app that sent the last link — routing leaves the destination
+    /// browser in the background, so focus goes back to the clicker.
+    private var urlSender: NSRunningApplication?
+    /// Pid of the last frontmost app that wasn't us — GURL delivery
+    /// activates the handler before the event arrives, so this is where a
+    /// clicked link came from. Written from the workspace observer's main
+    /// queue; always read on the main actor — the unsafe marker just lets
+    /// the non-Sendable notification block reach it.
+    nonisolated(unsafe) private var lastNonSelfFrontmostPid: pid_t = 0
 
-    var justRoutedLink: Bool {
-        guard let lastSuccessfulRouteAt else { return false }
-        return Date().timeIntervalSince(lastSuccessfulRouteAt) < 1
+    /// A link was just delivered (and possibly routed) — UI surfaces must
+    /// not appear right now. Covers the cold-launch race where a reopen
+    /// lands between the GURL event and `open` finishing.
+    var recentlyHandledURLEvent: Bool {
+        guard let lastURLEventAt else { return false }
+        return Date().timeIntervalSince(lastURLEventAt) < 3
+    }
+
+    private var uiOpenedByUserAt: Date?
+    /// Menu/Dock opens stamp this — a window created right after a route
+    /// is still the user's when they asked for it themselves.
+    func markUserOpenedUI() { uiOpenedByUserAt = Date() }
+    var recentlyOpenedUIByUser: Bool {
+        guard let uiOpenedByUserAt else { return false }
+        return Date().timeIntervalSince(uiOpenedByUserAt) < 3
     }
 
     // ⌃⌥O — clipboard link picker; ⌃⌥Space — move current tab.
@@ -29,8 +55,6 @@ final class LinkRouterService: NSObject {
     static let moveTabKey = (code: UInt32(kVK_Space), name: "⌃⌥Space")
     static let modifiers = UInt32(controlKey | optionKey)
     private var hotKeyRefs: [EventHotKeyRef?] = []
-    private var clipboardTimer: Timer?
-    private var lastChangeCount = 0
 
     func install() {
         guard !installed else { return }
@@ -50,19 +74,22 @@ final class LinkRouterService: NSObject {
                 Task { @MainActor in self?.model?.moveCurrentTab() }
             },
         ]
-        // No clipboard event on macOS — poll changeCount. Cheap and enough.
-        lastChangeCount = NSPasteboard.general.changeCount
-        clipboardTimer = Timer.scheduledTimer(withTimeInterval: 0.4,
-                                              repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.pollClipboard() }
+        // Track who was frontmost before each activation — GURL delivery
+        // activates us before the event arrives, so this remembers the
+        // clicker to restore after background routing. Seeded now: a cold
+        // launch's clicker was frontmost long before we existed.
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front != NSRunningApplication.current {
+            lastNonSelfFrontmostPid = front.processIdentifier
         }
-    }
-
-    private func pollClipboard() {
-        let count = NSPasteboard.general.changeCount
-        guard count != lastChangeCount else { return }
-        lastChangeCount = count
-        model?.clipboardPasted()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                    as? NSRunningApplication,
+                  app != NSRunningApplication.current else { return }
+            self?.lastNonSelfFrontmostPid = app.processIdentifier
+        }
     }
 
     /// Clicked link while BrowserDaddy is default browser — silent routing.
@@ -73,6 +100,22 @@ final class LinkRouterService: NSObject {
               let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return }
+        lastURLEventAt = Date()
+        // Delivery itself can activate us (LaunchServices brings the
+        // handler forward to send GURL) — only a *visible window* means
+        // the user actually had our UI up.
+        hadUIWhenURLEventArrived =
+            NSApplication.shared.windows.contains { $0.isVisible }
+        if let pid = event.attributeDescriptor(forKeyword: keySenderPIDAttr)?
+            .int32Value, pid != ProcessInfo.processInfo.processIdentifier {
+            urlSender = NSRunningApplication(processIdentifier: pid)
+        } else {
+            urlSender = nil
+        }
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front != NSRunningApplication.current {
+            lastNonSelfFrontmostPid = front.processIdentifier
+        }
         if let model {
             if model.route(url) { hideAfterRouting() }
         } else {
@@ -89,14 +132,29 @@ final class LinkRouterService: NSObject {
     }
 
     private func hideAfterRouting() {
-        lastSuccessfulRouteAt = Date()
-        NSApplication.shared.windows.forEach { $0.orderOut(nil) }
-        NSApplication.shared.hide(nil)
-        NSApplication.shared.setActivationPolicy(.accessory)
-        // A cold launch can create its SwiftUI window after the URL event.
-        DispatchQueue.main.async {
+        lastURLEventAt = Date()
+        // Links sent while our UI was already up (History's "Open URL", or
+        // an open main window) must not make the app vanish — only tear
+        // down surfaces the URL launch itself may have created.
+        if !hadUIWhenURLEventArrived {
             NSApplication.shared.windows.forEach { $0.orderOut(nil) }
             NSApplication.shared.hide(nil)
+            NSApplication.shared.setActivationPolicy(.accessory)
+            // A cold launch can create its SwiftUI window after the URL event.
+            DispatchQueue.main.async {
+                NSApplication.shared.windows.forEach { $0.orderOut(nil) }
+                NSApplication.shared.hide(nil)
+            }
+        }
+        // `-g` keeps the destination browser in the background; delivery
+        // may have activated us, so hand focus back to the clicker.
+        let candidates = [urlSender,
+                          NSRunningApplication(processIdentifier: lastNonSelfFrontmostPid)]
+        urlSender = nil
+        if let restore = candidates.lazy.compactMap({ $0 })
+            .first(where: { $0 != NSRunningApplication.current
+                && !$0.isTerminated }) {
+            restore.activate()
         }
     }
 }

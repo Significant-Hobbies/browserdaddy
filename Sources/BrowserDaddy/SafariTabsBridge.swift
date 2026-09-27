@@ -17,10 +17,9 @@ enum SafariTabsBridge {
             .appendingPathComponent(SafariTabWire.fileName)
     }
 
-    private static var actionURL: URL? {
+    private static var groupRoot: URL? {
         FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: SafariTabWire.groupID)?
-            .appendingPathComponent(SafariTabWire.actionFileName)
+            forSecurityApplicationGroupIdentifier: SafariTabWire.groupID)
     }
 
     static func inventory() async -> TabSourceState {
@@ -66,8 +65,11 @@ enum SafariTabsBridge {
     static func operate(_ action: String, tab: BrowserTab) async -> TabSourceState {
         guard tab.browser == .safari,
               action == "close" || action == "focus" else { return .unsupported }
-        guard let actionURL else { return .failed("Safari tab sharing is unavailable") }
         let requestID = UUID().uuidString
+        guard let actionURL = groupRoot?.appendingPathComponent(
+            SafariTabWire.actionFileName(requestID: requestID))
+        else { return .failed("Safari tab sharing is unavailable") }
+        sweepStaleActionResults()
         let error = await dispatch(action, userInfo: [
             "window": tab.window, "index": tab.index, "url": tab.url,
             "requestID": requestID,
@@ -85,6 +87,24 @@ enum SafariTabsBridge {
             try? await Task.sleep(for: .milliseconds(75))
         }
         return .failed("Safari did not confirm the tab action")
+    }
+
+    /// Unclaimed results from crashed/interrupted operations — each is
+    /// tiny, but they would accumulate forever otherwise. Anything older
+    /// than a minute is well past the 3s read timeout.
+    private static func sweepStaleActionResults() {
+        guard let root = groupRoot,
+              let entries = try? FileManager.default.contentsOfDirectory(
+                  at: root, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return }
+        let cutoff = Date().addingTimeInterval(-60)
+        for entry in entries
+        where entry.lastPathComponent.hasPrefix("safari-tab-action-") {
+            let mtime = (try? entry.resourceValues(
+                forKeys: [.contentModificationDateKey])
+                .contentModificationDate) ?? .distantPast
+            if mtime < cutoff { try? FileManager.default.removeItem(at: entry) }
+        }
     }
 
     static func openPreferences() {

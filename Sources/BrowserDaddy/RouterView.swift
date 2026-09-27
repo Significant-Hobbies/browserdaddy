@@ -205,17 +205,8 @@ struct RouterView: View {
         BrowserBand(label: "ACTIONS",
                     subtitle: "Explicit picks — the floating target chooser") {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle("React to links copied anywhere", isOn: Binding(
-                    get: { model.routerConfig.clipboardWatch },
-                    set: { var c = model.routerConfig
-                           c.clipboardWatch = $0
-                           model.setRouterConfig(c) }))
-                    .tint(BrowserTheme.mintInk)
-                    .foregroundStyle(BrowserTheme.ink)
-                Text(model.routerConfig.clipboardWatch
-                     ? "Copy a link anywhere to choose where it opens. "
-                       + "A matching rule is preselected; nothing opens until you choose."
-                     : "Auto-detection is off — use the hotkeys below.")
+                Text("Nothing reacts to copying on its own — the picker "
+                     + "only appears when you ask for it.")
                     .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
                 HStack(spacing: 12) {
                     Button("Open clipboard link") { model.openClipboardLink() }

@@ -36,6 +36,9 @@ final class LinkPickerPanelController {
     private var previousApp: NSRunningApplication?
     private let state = LinkPickerState()
 
+    /// Explicit invocations only (⌃⌥O, ⌃⌥Space, menu) — the panel takes
+    /// focus and answers keystrokes. Nothing floats this on its own;
+    /// copying a link never surfaces UI.
     func show(url: URL, targets: [LinkTarget],
               profileNames: [String: String] = [:], preselect: LinkTarget?,
               matchedRule: RouteRule?,
@@ -80,20 +83,20 @@ final class LinkPickerPanelController {
         NSApp.unhideWithoutActivation()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate()
-        self.panel = panel
-
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
             [weak self] event in
             guard let self, self.panel != nil else { return event }
             return self.handleKey(event) ? nil : event
         }
-        // Clicking away resigns key/active — autoclose like every floating
-        // chooser (Esc only reaches a local monitor while we're frontmost).
+        // Clicking away resigns key/active — autoclose like every
+        // floating chooser (Esc only reaches a local monitor while
+        // we're frontmost).
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,
             object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.dismiss() }
         }
+        self.panel = panel
     }
 
     func dismiss(restoreFocus: Bool = false) {
@@ -134,8 +137,11 @@ final class LinkPickerPanelController {
             state.selection = max(state.selection - 1, 0)
             return true
         default:
-            // digits 1–9 jump straight to a target
-            if let chars = event.charactersIgnoringModifiers,
+            // digits 1–9 jump straight to a target — bare keys only, so
+            // ⌘1-style chords still reach whatever the user meant them for
+            if event.modifierFlags
+                .intersection([.command, .control, .option]).isEmpty,
+               let chars = event.charactersIgnoringModifiers,
                let digit = chars.first, digit.isNumber, digit != "0",
                let idx = Int(String(digit)), idx <= state.targets.count {
                 state.selection = idx - 1

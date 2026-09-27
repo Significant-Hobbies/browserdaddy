@@ -12,13 +12,31 @@ final class BrowserDaddyAppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated { BrowserDaddyRuntime.start() }
     }
 
+    /// Launch stays windowless with one exception: an un-onboarded app
+    /// opens its window so first-run setup is reachable without digging.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        for delay in [0.8, 2.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard BrowserDaddyRuntime.startup.model?.needsOnboarding == true,
+                      let open = WindowReopener.shared.openWindow,
+                      !NSApplication.shared.windows.contains(where: { $0.isVisible })
+                else { return }
+                LinkRouterService.shared.markUserOpenedUI()
+                NSApplication.shared.setActivationPolicy(.regular)
+                open(id: "main")
+                NSApplication.shared.activate()
+            }
+        }
+    }
+
     /// The app stays alive windowless — routing/hotkeys are background
     /// features — but a Dock/⌘-tab click must rebuild the main window.
     func applicationShouldHandleReopen(_ sender: NSApplication,
                                        hasVisibleWindows flag: Bool) -> Bool {
         if flag { return true }
-        if LinkRouterService.shared.justRoutedLink { return false }
+        if LinkRouterService.shared.recentlyHandledURLEvent { return false }
         guard let open = WindowReopener.shared.openWindow else { return true }
+        LinkRouterService.shared.markUserOpenedUI()
         open(id: "main")
         sender.activate()
         return false
@@ -129,7 +147,8 @@ private struct BrowserDaddyContent: View {
         .environmentObject(model)
         .onAppear {
             WindowReopener.shared.openWindow = openWindow
-            if LinkRouterService.shared.justRoutedLink {
+            if LinkRouterService.shared.recentlyHandledURLEvent,
+               !LinkRouterService.shared.recentlyOpenedUIByUser {
                 DispatchQueue.main.async {
                     NSApplication.shared.windows.forEach { $0.orderOut(nil) }
                     NSApplication.shared.hide(nil)
@@ -144,7 +163,9 @@ private struct BrowserDaddyStatusMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Open BrowserDaddy") {
+        Button(startup.model?.needsOnboarding == true
+               ? "Finish setup…" : "Open BrowserDaddy") {
+            LinkRouterService.shared.markUserOpenedUI()
             NSApplication.shared.setActivationPolicy(.regular)
             openWindow(id: "main")
             NSApplication.shared.activate()
@@ -158,6 +179,17 @@ private struct BrowserDaddyStatusMenu: View {
     }
 }
 
+/// The menubar icon renders eagerly at launch — capture openWindow here
+/// so a Dock/⌘-tab reopen can build the (launch-suppressed) main window
+/// even when none has ever existed.
+private struct MenuBarIcon: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Image(systemName: "link")
+            .onAppear { WindowReopener.shared.openWindow = openWindow }
+    }
+}
+
 @main
 struct BrowserDaddyApp: App {
     @NSApplicationDelegateAdaptor(BrowserDaddyAppDelegate.self)
@@ -166,10 +198,45 @@ struct BrowserDaddyApp: App {
     @ObservedObject private var updates = BrowserDaddyRuntime.updates
 
     var body: some Scene {
-        MenuBarExtra("BrowserDaddy", systemImage: "link") {
+        MenuBarExtra {
             BrowserDaddyStatusMenu(startup: startup)
+        } label: {
+            MenuBarIcon()
         }
 
+        // Never create this window on launch — a GURL-launched copy is a
+        // routing pipe, not a UI session. It exists only after an explicit
+        // open (menu item, Dock/⌘-tab reopen).
+        mainWindow.defaultLaunchBehavior(.suppressed)
+
+        Settings {
+            Group {
+                if let model = startup.model {
+                    VStack(alignment: .leading, spacing: 18) {
+                        AlertSettingsView()
+                        Divider().overlay(BrowserTheme.divider)
+                        Button("Review first-run setup…") {
+                            model.replayOnboarding()
+                        }
+                        Text("Reopens onboarding — connect browsers, review "
+                             + "what's collected.")
+                            .font(.caption)
+                            .foregroundStyle(BrowserTheme.secondaryInk)
+                    }
+                    .environmentObject(model)
+                } else {
+                    Text("Archive unavailable — reopen the app.")
+                        .foregroundStyle(BrowserTheme.secondaryInk)
+                }
+            }
+            .padding(24).frame(width: 480)
+            .preferredColorScheme(.dark)
+            .tint(BrowserTheme.action)
+            .buttonStyle(DaddyButtonStyle())
+        }
+    }
+
+    private var mainWindow: some Scene {
         WindowGroup("browserdaddy", id: "main") {
             Group {
                 if let model = startup.model {
@@ -208,32 +275,6 @@ struct BrowserDaddyApp: App {
                 }.keyboardShortcut("r")
                     .disabled(startup.model == nil)
             }
-        }
-
-        Settings {
-            Group {
-                if let model = startup.model {
-                    VStack(alignment: .leading, spacing: 18) {
-                        AlertSettingsView()
-                        Divider().overlay(BrowserTheme.divider)
-                        Button("Review first-run setup…") {
-                            model.replayOnboarding()
-                        }
-                        Text("Reopens onboarding — connect browsers, review "
-                             + "what's collected.")
-                            .font(.caption)
-                            .foregroundStyle(BrowserTheme.secondaryInk)
-                    }
-                    .environmentObject(model)
-                } else {
-                    Text("Archive unavailable — reopen the app.")
-                        .foregroundStyle(BrowserTheme.secondaryInk)
-                }
-            }
-            .padding(24).frame(width: 480)
-            .preferredColorScheme(.dark)
-            .tint(BrowserTheme.action)
-            .buttonStyle(DaddyButtonStyle())
         }
     }
 }

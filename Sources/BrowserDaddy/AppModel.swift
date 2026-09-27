@@ -258,7 +258,7 @@ final class AppModel: ObservableObject {
         let rule = routerConfig.enabled
             ? RuleEngine.match(url, rules: routerConfig.rules) : nil
         let target = rule?.target ?? routerConfig.fallback
-        if openTarget(url, target) {
+        if openTarget(url, target, foreground: false) {
             routerStatus = rule.map { "→ \(target.label) · \($0.pattern)" }
                 ?? "→ \(target.label)"
             return true
@@ -267,16 +267,19 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    private func openTarget(_ url: URL, _ target: LinkTarget) -> Bool {
+    private func openTarget(_ url: URL, _ target: LinkTarget,
+                            foreground: Bool) -> Bool {
         do {
-            try BrowserOpener.open(url, target: target)
+            try BrowserOpener.open(url, target: target,
+                                   foreground: foreground)
             return true
         } catch {
             // Fallback recovery — any installed browser, never ourselves.
             for kind in BrowserKind.allCases where kind != target.browser {
                 guard BrowserOpener.appURL(for: kind) != nil else { continue }
                 do {
-                    try BrowserOpener.open(url, target: LinkTarget(browser: kind))
+                    try BrowserOpener.open(url, target: LinkTarget(browser: kind),
+                                           foreground: foreground)
                 } catch {
                     continue
                 }
@@ -310,14 +313,6 @@ final class AppModel: ObservableObject {
             scheme == "http" || scheme == "https"
         else { return nil }
         return url
-    }
-
-    /// Pasteboard changed (fired by LinkRouterService's poll). Every fresh
-    /// copy of a link opens the target picker. Re-copying the same URL opens
-    /// it again; nothing launches until the person chooses a target.
-    func clipboardPasted() {
-        guard routerConfig.clipboardWatch, let url = clipboardURL() else { return }
-        presentPicker(url)
     }
 
     // MARK: tabs inventory
@@ -385,7 +380,13 @@ final class AppModel: ObservableObject {
         }
         runTabOp {
             var last: TabSourceState = .tabs([])
-            for t in tabs { last = TabInventory.close(t) }
+            // Tabs are addressed by index — closing tab N renumbers N+1,
+            // so close highest first or later closes hit the wrong tab.
+            for t in tabs.sorted(by: {
+                ($0.window, $0.index) > ($1.window, $1.index)
+            }) {
+                last = TabInventory.close(t)
+            }
             return last
         }
     }
@@ -407,7 +408,8 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let url = URL(string: tab.url) else { return }
             do {
-                try BrowserOpener.open(url, target: target)
+                try BrowserOpener.open(url, target: target,
+                                       foreground: true)
                 var sourceClosed = true
                 if tab.browser == .safari {
                     let result = await SafariTabsBridge.operate("close", tab: tab)
@@ -474,7 +476,8 @@ final class AppModel: ObservableObject {
     }
 
     /// ⌃⌥Space — frontmost browser's active tab, moved through the picker.
-    /// Incognito windows return .unavailable where detectable (Chrome/Brave).
+    /// Incognito windows return .unavailable where detectable (Chromium
+    /// window-mode check); a missing `mode` in a browser's sdef fails closed.
     func moveCurrentTab() {
         switch FrontmostTab.capture() {
         case .url(_, let value):
@@ -505,7 +508,8 @@ final class AppModel: ObservableObject {
             profileNames: routerProfileNames,
             preselect: rule?.target, matchedRule: rule) { [weak self] target in
             guard let self else { return }
-            if self.openTarget(url, target) {
+            // An explicit pick shows the result in the chosen browser.
+            if self.openTarget(url, target, foreground: true) {
                 self.routerStatus = "→ \(target.label)"
             }
         }
@@ -793,6 +797,21 @@ final class AppModel: ObservableObject {
         let store = self.store
         let grants = browserGrantStore
         Task.detached(priority: .utility) {
+            // One-time import of the Python prototype archive, if present.
+            do {
+                if try ArchiveImporter.importIfNeeded(into: store) {
+                    Task { @MainActor in
+                        self.extractLog.append(
+                            "✓ imported the legacy ~/browserdaddy archive")
+                    }
+                }
+            } catch {
+                Task { @MainActor in
+                    self.extractLog.append(
+                        "⚠ legacy archive import failed — "
+                        + error.localizedDescription)
+                }
+            }
             let results = grants.withAccessibleRoots { roots, failures in
                 for failure in failures {
                     Task { @MainActor in

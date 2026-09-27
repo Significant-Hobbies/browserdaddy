@@ -20,7 +20,7 @@ struct AlertSettingsView: View {
                 capRow("Focused minutes per day", \.dailyMinutes)
                 capRow("Minutes on one page before a nudge", \.streakMinutes)
                 capRow("Agent-driven minutes per day", \.agentMinutes)
-                Text("Agent time is counted separately: it needs Chrome tab "
+                Text("Agent time is counted separately: it needs Chromium tab "
                      + "churn with no input — other browsers can't qualify, "
                      + "and it doesn't count toward your focused cap.")
                     .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
@@ -73,17 +73,27 @@ struct AlertSettingsView: View {
                 Stepper("\(capMinutes) min", value: $capMinutes,
                         in: 5...480, step: 5)
                 Button("Add") {
-                    let h = capHost.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let raw = capHost
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
                         .lowercased()
-                    guard !h.isEmpty else { return }
+                    guard !raw.isEmpty else { return }
+                    // Accept pasted URLs too — store host[:port], which is
+                    // exactly what focus rows carry.
+                    var host = raw
+                    if let parsed = URL(string: raw.contains("://")
+                                        ? raw : "https://" + raw),
+                       let h = parsed.host, !h.isEmpty {
+                        host = parsed.port.map { "\(h):\($0)" } ?? h
+                    }
                     var c = model.alertConfig
-                    c.siteCaps[h] = capMinutes
+                    c.siteCaps[host] = capMinutes
                     model.setAlertConfig(c)
                     capHost = ""
                 }
                 .disabled(capHost.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            Text("Site caps use captured tab URLs — Chrome only for now.")
+            Text("Site caps use captured tab URLs — Chromium browsers only; "
+                 + "a cap covers the whole site including subdomains.")
                 .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
         }
     }
