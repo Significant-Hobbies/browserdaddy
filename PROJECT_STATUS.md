@@ -1,6 +1,14 @@
 # BrowserDaddy — project status
 
-## 2026-09-27 — URL-handler launches stay windowless (local, unreleased)
+## 2026-09-27 — 0.4.7 build 16: windowless routing, invisible after setup
+
+Protected release run 36319870382 signed, notarized, stapled, launched,
+and published source `9d3d8fb` as 0.4.7 build 16. Public DMG verified
+SHA-256 `4bf7c059fa236d0cdc1b8d12790fc76e0db211806c7ce65b6620f3b23e2560eb`;
+installed to /Applications and live-verified: launch opens 0 windows, a
+routed link opens a background tab and restores focus to the clicker.
+macOS floor is now 15 (`Scene.defaultLaunchBehavior` requirement;
+LSMinimumSystemVersion updated). Details below.
 
 Clicking a link registered to BrowserDaddy no longer flashes the main
 window: the WindowGroup carries `.defaultLaunchBehavior(.suppressed)`, so
