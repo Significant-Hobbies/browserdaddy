@@ -71,7 +71,7 @@ struct PermissionsView: View {
         BrowserBand(label: "TABS",
                     subtitle: "Browser automation and Safari extension access") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Chromium-family tabs are read only from windows verified "
+                Text("Chrome tabs are read only from windows verified "
                      + "as normal. Safari tabs come from its optional extension, "
                      + "which excludes Private Browsing before sharing URLs. "
                      + "Anything unverifiable stays app-only.")
