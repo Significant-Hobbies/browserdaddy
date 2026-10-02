@@ -218,7 +218,7 @@ struct RouterView: View {
                      + "frontmost browser's current tab elsewhere\n"
                      + "In the picker: ↑↓ choose, ⏎ open, 1–9 jump, esc cancel")
                     .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                Text("The current-tab hotkey reads normal Chrome or Brave "
+                Text("The current-tab hotkey reads normal Chrome "
                      + "windows after Automation consent. Safari tabs are "
                      + "managed from Tabs after enabling its extension.")
                     .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
