@@ -30,9 +30,10 @@ menu bar icon opens the full app. Rule patterns are case-insensitive: `github.co
 subdomains, `*.corp.dev` globs the host, and any pattern containing `/` globs
 the whole URL.
 
-Copy a link in any app and a floating browser menu appears (toggle in Router
-→ ACTIONS). A matching rule preselects its target, but nothing opens until
-you choose. ⌃⌥O reopens the menu for the copied link; ⌃⌥Space takes the
+After copying a link, use **Choose browser for copied link** in the menu bar
+or press ⌃⌥O to open the floating browser menu. Copying alone does not open
+the menu. A matching rule preselects its target, but nothing opens until
+you choose. ⌃⌥Space takes the
 frontmost Chrome or Brave normal tab to another browser. Safari's current-tab
 hotkey is disabled because AppleScript cannot distinguish private windows.
 In the picker: arrows + ⏎, digits 1–9, single click, esc or clicking away
