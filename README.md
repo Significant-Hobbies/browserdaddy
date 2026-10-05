@@ -34,7 +34,7 @@ After copying a link, use **Choose browser for copied link** in the menu bar
 or press ⌃⌥O to open the floating browser menu. Copying alone does not open
 the menu. A matching rule preselects its target, but nothing opens until
 you choose. ⌃⌥Space takes the
-frontmost Chrome or Brave normal tab to another browser. Safari's current-tab
+frontmost Chrome normal tab to another browser. Safari's current-tab
 hotkey is disabled because AppleScript cannot distinguish private windows.
 In the picker: arrows + ⏎, digits 1–9, single click, esc or clicking away
 dismisses it.
