@@ -307,9 +307,7 @@ struct BrowserDaddyApp: App {
                     .disabled(startup.model == nil)
             }
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") { updates.check() }
-                    .disabled(!updates.canCheck || !updates.isIdle)
-                Toggle("Automatically Check for Updates", isOn: $updates.automaticallyChecks)
+                DaddyUpdateMenu(updates: updates)
             }
             CommandGroup(after: .newItem) {
                 Button("Sync History") { startup.model?.runExtract() }
