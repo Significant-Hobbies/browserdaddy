@@ -2,18 +2,18 @@ import SwiftUI
 
 /// Daddy series theme — same palette as StorageDaddy/PerformanceDaddy.
 enum BrowserTheme {
-    static let fog = Color.black
-    static let surface = Color.black
-    static let ink = Color.white
-    static let secondaryInk = Color(red: 0.78, green: 0.90, blue: 0.86)
-    static let coral = Color(red: 0.90, green: 0.46, blue: 0.40)
+    static let fog = DaddyPalette.canvas
+    static let surface = DaddyPalette.canvas
+    static let ink = DaddyPalette.ink
+    static let secondaryInk = DaddyPalette.secondaryInk
+    static let coral = DaddyPalette.coral
     static let coralWash = coral.opacity(0.12)
-    static let mintInk = Color(red: 0.42, green: 0.79, blue: 0.62)
+    static let mintInk = DaddyPalette.mint
     static let mint = mintInk.opacity(0.18)
     static let action = mintInk
-    static let blue = Color(red: 0.33, green: 0.58, blue: 0.83)
-    static let cyan = Color(red: 0.27, green: 0.70, blue: 0.75)
-    static let amber = Color(red: 0.87, green: 0.67, blue: 0.28)
+    static let blue = DaddyPalette.blue
+    static let cyan = DaddyPalette.cyan
+    static let amber = DaddyPalette.amber
     static let divider = secondaryInk.opacity(0.18)
 }
 

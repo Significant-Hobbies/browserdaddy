@@ -41,6 +41,17 @@ final class BrowserDaddyAppDelegate: NSObject, NSApplicationDelegate {
         sender.activate()
         return false
     }
+
+    /// Routing, hotkeys, attention and periodic sync keep running windowless.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            let activeWork = BrowserDaddyRuntime.startup.model?.activeWorkDescription
+            return DaddyQuitReview.shouldQuit(appName: "BrowserDaddy", activeWork: activeWork)
+                ? .terminateNow : .terminateCancel
+        }
+    }
 }
 
 /// The scene's OpenWindowAction captured for the app delegate — SwiftUI
@@ -160,22 +171,56 @@ private struct BrowserDaddyContent: View {
 
 private struct BrowserDaddyStatusMenu: View {
     @ObservedObject var startup: AppStartup
+
+    var body: some View {
+        if let model = startup.model {
+            BrowserDaddyModelMenu(model: model)
+        } else {
+            DaddyMenuStatus(message: "Archive unavailable")
+            Divider()
+            BrowserDaddyOpenButton(needsOnboarding: false)
+            Divider()
+            DaddyMenuQuitButton(appName: "BrowserDaddy")
+        }
+    }
+}
+
+private struct BrowserDaddyModelMenu: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        DaddyMenuStatus(message: model.menuStatus)
+        Divider()
+        BrowserDaddyOpenButton(needsOnboarding: model.needsOnboarding)
+        Button("Choose browser for copied link") { model.openClipboardLink() }
+        if !model.needsOnboarding {
+            Button("Sync History") { model.syncHistoryNow() }
+                .disabled(model.extracting)
+        }
+        Divider()
+        Toggle("Launch at Login", isOn: Binding(
+            get: { model.launchAtLogin },
+            set: { model.setLaunchAtLogin($0) }))
+        if let message = model.launchAtLoginMessage { Text(message) }
+        DaddyCompletionNoticeToggle(title: "Notify When Sync or Classification Finishes")
+        Divider()
+        DaddyMenuQuitButton(appName: "BrowserDaddy")
+    }
+}
+
+/// BrowserDaddy's open path also leaves accessory mode for a UI session.
+private struct BrowserDaddyOpenButton: View {
+    let needsOnboarding: Bool
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button(startup.model?.needsOnboarding == true
+        Button(needsOnboarding
                ? "Finish setup…" : "Open BrowserDaddy") {
             LinkRouterService.shared.markUserOpenedUI()
             NSApplication.shared.setActivationPolicy(.regular)
             openWindow(id: "main")
             NSApplication.shared.activate()
         }
-        Button("Choose browser for copied link") {
-            startup.model?.openClipboardLink()
-        }
-        .disabled(startup.model == nil)
-        Divider()
-        Button("Quit BrowserDaddy") { NSApplication.shared.terminate(nil) }
     }
 }
 

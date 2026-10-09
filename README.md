@@ -71,6 +71,12 @@ app-scoped security bookmarks. Full Disk Access is neither requested nor
 required. Archive extraction runs on boot and every 6h; the focus watcher runs
 while the app is alive.
 
+Closing the window keeps routing, attention and periodic history sync running
+from the menu bar. The menu shows sync status, starts **Sync History**, and
+offers opt-in **Launch at Login** and completion notices for a menu-started sync
+or classification that finishes while no window is open. Quitting during a
+sync or classification asks before interrupting it.
+
 Classification (classifier.dev) is the app's only network call and only
 runs when you allow it — in onboarding or via Permissions → TAGGING.
 Everything else is on-device.
