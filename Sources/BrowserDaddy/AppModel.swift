@@ -1,6 +1,5 @@
 import Foundation
 import BrowserCore
-import ServiceManagement
 import AppKit
 import CoreServices
 
@@ -8,6 +7,8 @@ import CoreServices
 final class AppModel: ObservableObject {
     @Published var report: ReportEngine.Report?
     @Published var extracting = false
+    @Published private(set) var lastSuccessfulSyncAt: Date?
+    @Published private(set) var lastSyncNeedsAttention = false
     @Published var extractLog: [String] = []
     @Published var automation: [String: Permissions.AutomationState] = [:]
     @Published var browserAccess: [BrowserAccessStatus] = []
@@ -40,6 +41,8 @@ final class AppModel: ObservableObject {
         didSet { Task { await search() } }
     }
     @Published var launchAtLogin = false
+    @Published private(set) var launchAtLoginMessage: String?
+    let loginItem: DaddyLaunchAtLogin
     @Published var showAbout = false
     // attention surface
     @Published var nowApp = ""
@@ -90,6 +93,7 @@ final class AppModel: ObservableObject {
     @Published var alertConfig = AlertConfig()
     private var didStartCollection = false
     private var lastExtractAt = Date.distantPast
+    private var notifyWhenSyncFinishes = false
     private var classificationTask: Task<Void, Never>?
     static let classificationConsentVersion = "2"
     private let startCollectionOverride: (() -> Void)?
@@ -109,7 +113,9 @@ final class AppModel: ObservableObject {
         alerts.deliver = AlertDelivery.post
         startCollectionOverride = startCollection
         self.browserGrantStore = browserGrantStore
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+        loginItem = DaddyLaunchAtLogin()
+        launchAtLogin = loginItem.isEnabled
+        launchAtLoginMessage = loginItem.message
         needsOnboarding = store.metaGet("onboarded") != "1"
         classifyOptin = store.metaGet("classify_optin") == "1"
             && store.metaGet("classify_consent_version") == Self.classificationConsentVersion
@@ -649,6 +655,11 @@ final class AppModel: ObservableObject {
                                  r.coveragePct)
                 }
                 await self.reloadFiltered()
+                await MainActor.run {
+                    DaddyCompletionNotices.postIfWindowHidden(
+                        title: "Classification complete",
+                        body: "Open BrowserDaddy to review categorized history.")
+                }
             } catch {
                 if !Task.isCancelled { log("Classification failed. Please try again.") }
             }
@@ -789,6 +800,32 @@ final class AppModel: ObservableObject {
         if Date().timeIntervalSince(lastExtractAt) > 30 * 60 { runExtract() }
     }
 
+    /// Menu-started sync can finish after the window is gone, so it may notify.
+    /// Periodic background passes stay silent.
+    func syncHistoryNow() {
+        guard !needsOnboarding, !extracting else { return }
+        notifyWhenSyncFinishes = true
+        runExtract()
+    }
+
+    /// Long-running work that quitting would interrupt.
+    var activeWorkDescription: String? {
+        if extracting { return "History sync is still running." }
+        if classifying { return "Classification is still running." }
+        return nil
+    }
+
+    var menuStatus: String {
+        if needsOnboarding { return "Setup needed before collection" }
+        if extracting { return "Syncing local history…" }
+        if classifying { return "Classifying history…" }
+        if lastSyncNeedsAttention { return "Last history sync needs attention" }
+        if let lastSuccessfulSyncAt {
+            return "Last history sync \(lastSuccessfulSyncAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return "History not synced yet"
+    }
+
     func runExtract() {
         guard !needsOnboarding, !extracting else { return }
         extracting = true
@@ -812,7 +849,7 @@ final class AppModel: ObservableObject {
                         + error.localizedDescription)
                 }
             }
-            let results = grants.withAccessibleRoots { roots, failures in
+            let (results, hasConnectedRoots, hasGrantFailures) = grants.withAccessibleRoots { roots, failures in
                 for failure in failures {
                     Task { @MainActor in
                         self.extractLog.append("✗ \(failure.kind.displayName): \(failure.message)")
@@ -823,9 +860,10 @@ final class AppModel: ObservableObject {
                         self.extractLog.append("No browser folders connected. Open Permissions to add one.")
                     }
                 }
-                return HistoryExtractor.run(into: store, roots: roots) { line in
+                let results = HistoryExtractor.run(into: store, roots: roots) { line in
                     Task { @MainActor in self.extractLog.append(line) }
                 }
+                return (results, !roots.isEmpty, !failures.isEmpty)
             }
             for r in results {
                 if let err = r.error {
@@ -835,7 +873,8 @@ final class AppModel: ObservableObject {
                     }
                 }
             }
-            await MainActor.run { self.extracting = false }
+            let needsAttention = !hasConnectedRoots || hasGrantFailures || results.contains { $0.error != nil }
+            await MainActor.run { self.finishExtract(needsAttention: needsAttention) }
             await MainActor.run { self.refreshBrowserAccess() }
             await self.reload()
         }
@@ -867,11 +906,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func finishExtract(needsAttention: Bool, at date: Date = Date()) {
+        extracting = false
+        lastSyncNeedsAttention = needsAttention
+        if !needsAttention { lastSuccessfulSyncAt = date }
+        if notifyWhenSyncFinishes {
+            notifyWhenSyncFinishes = false
+            DaddyCompletionNotices.postIfWindowHidden(
+                title: needsAttention ? "History sync needs attention" : "History sync complete",
+                body: "Open BrowserDaddy to review the archive.")
+        }
+    }
+
     func setLaunchAtLogin(_ on: Bool) {
-        do {
-            if on { try SMAppService.mainApp.register() }
-            else { try SMAppService.mainApp.unregister() }
-        } catch {}
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+        loginItem.set(on)
+        launchAtLogin = loginItem.isEnabled
+        launchAtLoginMessage = loginItem.message
     }
 }
