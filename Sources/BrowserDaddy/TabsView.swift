@@ -2,6 +2,7 @@ import AppKit
 import BrowserCore
 import Combine
 import SwiftUI
+import SaaSMakerUI
 
 /// Live tab inventory. Chrome uses normal-window AppleScript; Safari's app
 /// extension filters Private Browsing before it shares any tab details.
@@ -48,9 +49,7 @@ struct TabsView: View {
 
     private var toolbarTitle: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Open tabs")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(BrowserTheme.ink)
+            SMSectionHeader("Open tabs", size: 22)
             Text(tabSummary)
                 .font(.caption)
                 .foregroundStyle(BrowserTheme.secondaryInk)
@@ -90,12 +89,13 @@ struct TabsView: View {
                 .accessibilityLabel("Clear tab search")
             }
             if !model.tabSelection.isEmpty {
-                Button("Focus") { focusSelected() }
+                Button("Focus") { focusSelected() }.textCase(.lowercase)
                 Button("Close \(model.tabSelection.count) tabs") {
                     let ids = model.tabSelection
                     model.closeTabs(model.allTabs.filter { ids.contains($0.id) })
                     model.tabSelection = []
                 }
+                .textCase(.lowercase)
                 .buttonStyle(DaddyButtonStyle(prominent: true))
             }
             if model.tabsRefreshing {
@@ -103,7 +103,7 @@ struct TabsView: View {
                     .accessibilityLabel("Refreshing tabs")
             }
             Button { model.refreshTabs() } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise").textCase(.lowercase)
             }
             .disabled(model.tabsRefreshing || model.isPreviewFixture)
         }
@@ -156,7 +156,7 @@ struct TabsView: View {
                                         "x-apple.systempreferences:"
                                         + "com.apple.preference.security"
                                         + "?Privacy_Automation")!)
-                                }
+                                }.textCase(.lowercase)
                                 .buttonStyle(.link)
                             }
                         }
@@ -175,7 +175,7 @@ struct TabsView: View {
                                 .foregroundStyle(BrowserTheme.secondaryInk)
                                 .help(msg)
                             Spacer()
-                            Button("Retry") { model.refreshTabs() }
+                            Button("Retry") { model.refreshTabs() }.textCase(.lowercase)
                                 .disabled(model.tabsRefreshing)
                         }
                         .font(.caption)
@@ -237,8 +237,8 @@ struct TabsView: View {
         .draggable(tab)
         .onTapGesture(count: 2) { model.focusTab(tab) }
         .contextMenu {
-            Button("Focus tab") { model.focusTab(tab) }
-            Button("Close tab") { model.closeTab(tab) }
+            Button("Focus tab") { model.focusTab(tab) }.textCase(.lowercase)
+            Button("Close tab") { model.closeTab(tab) }.textCase(.lowercase)
             Divider()
             Menu("Send to") {
                 ForEach(model.routerTargets().filter {
@@ -253,7 +253,7 @@ struct TabsView: View {
             Button("Copy URL") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(tab.url, forType: .string)
-            }
+            }.textCase(.lowercase)
         }
         .tag(tab.id)
     }

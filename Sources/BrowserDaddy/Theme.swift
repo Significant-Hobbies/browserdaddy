@@ -1,7 +1,23 @@
 import SwiftUI
+import SaaSMakerUI
 
 /// Daddy series theme — same palette as StorageDaddy/PerformanceDaddy.
 enum BrowserTheme {
+    static let palette: SMPalette = {
+        var palette = SMPalette.ink.brand(DaddyPalette.mint, foreground: .black)
+        palette.background = DaddyPalette.canvas
+        palette.surface = DaddyPalette.canvas
+        palette.card = DaddyPalette.canvas
+        palette.foreground = DaddyPalette.ink
+        palette.mutedForeground = DaddyPalette.secondaryInk
+        palette.hairline = DaddyPalette.secondaryInk.opacity(0.18)
+        palette.success = DaddyPalette.mint
+        palette.destructive = DaddyPalette.coral
+        palette.warning = DaddyPalette.amber
+        palette.radius = 14
+        return palette
+    }()
+
     static let fog = DaddyPalette.canvas
     static let surface = DaddyPalette.canvas
     static let ink = DaddyPalette.ink
@@ -58,28 +74,23 @@ struct BrowserBand<Content: View>: View {
     private var storeKey: String { "band-collapsed-\(label)" }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 24) {
-                bandHeading.frame(width: 124, alignment: .leading)
-                if !collapsed {
-                    Divider()
-                    content.frame(maxWidth: .infinity, alignment: .leading)
+        SMCard(padding: 24) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 24) {
+                    bandHeading.frame(width: 124, alignment: .leading)
+                    if !collapsed {
+                        Divider()
+                        content.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 16) {
+                    bandHeading
+                    if !collapsed {
+                        Divider()
+                        content.frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
-            VStack(alignment: .leading, spacing: 16) {
-                bandHeading
-                if !collapsed {
-                    Divider()
-                    content.frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-        .padding(24)
-        .background(BrowserTheme.surface.opacity(0.82))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(BrowserTheme.divider, lineWidth: 1)
         }
         .onAppear {
             collapsed = UserDefaults.standard.bool(forKey: storeKey)
@@ -97,9 +108,7 @@ struct BrowserBand<Content: View>: View {
                                                 : "chevron.down")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(BrowserTheme.mintInk)
-                    Text(label)
-                        .font(.headline)
-                        .foregroundStyle(BrowserTheme.secondaryInk)
+                    SMSectionHeader(label, size: 14)
                         .accessibilityAddTraits(.isHeader)
                 }
                 Text(subtitle)
@@ -215,7 +224,7 @@ struct FilterBar: View {
                 Button("Clear filters") {
                     model.filterSource = "all"
                     model.filterDays = 0
-                }
+                }.textCase(.lowercase)
             }
             Spacer()
         }

@@ -1,4 +1,5 @@
 import SwiftUI
+import SaaSMakerUI
 import BrowserCore
 
 struct DashboardView: View {
@@ -50,9 +51,7 @@ struct DashboardView: View {
         HStack(alignment: .top, spacing: 18) {
             DaddyArtwork(brand: true).frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 7) {
-                Text("\(r.totalVisits.formatted()) visits archived")
-                    .font(.largeTitle.bold())
-                    .foregroundStyle(BrowserTheme.ink)
+                SMSectionHeader("\(r.totalVisits.formatted()) visits archived", size: 32)
                     .accessibilityAddTraits(.isHeader)
                 Text("\(r.uniqueURLs.formatted()) unique URLs across "
                      + "\(r.uniqueDomains.formatted()) domains")
@@ -81,9 +80,9 @@ struct DashboardView: View {
                     subtitle: "Visits per bucket, stacked by browser") {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("granularity", selection: $model.granularity) {
-                    Text("Day").tag(0); Text("Week").tag(1); Text("Month").tag(2)
+                    Text("Day").textCase(.lowercase).tag(0); Text("Week").textCase(.lowercase).tag(1); Text("Month").textCase(.lowercase).tag(2)
                 }
-                .pickerStyle(.segmented).frame(width: 220)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 220)
                 DailyStackedBars(
                     series: model.granularity == 2 ? r.monthlySeries
                           : model.granularity == 1 ? r.weeklySeries
@@ -238,7 +237,7 @@ struct DashboardView: View {
                 }
                 if !r.categoryTrends.isEmpty {
                     Divider().overlay(BrowserTheme.divider)
-                    Text("MONTHLY").font(.caption.weight(.semibold))
+                    Text("monthly").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.categoryTrends.enumerated()), id: \.offset) { _, t in
                         HStack(spacing: 14) {
@@ -304,7 +303,7 @@ struct DashboardView: View {
                 }
                 if !r.topicTrends.isEmpty {
                     Divider().overlay(BrowserTheme.divider)
-                    Text("MONTHLY").font(.caption.weight(.semibold))
+                    Text("monthly").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.topicTrends.enumerated()), id: \.offset) { _, t in
                         HStack(spacing: 14) {
@@ -363,7 +362,7 @@ struct DashboardView: View {
                     subtitle: "What starts and ends a browsing day · median \(r.medianDayStart)–\(r.medianDayEnd)") {
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("OPENS WITH").font(.caption.weight(.semibold))
+                    Text("opens with").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.dayStarts.enumerated()), id: \.offset) { _, d in
                         RankRow(value: "\(d.value)×", label: d.label,
@@ -371,7 +370,7 @@ struct DashboardView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("CLOSES WITH").font(.caption.weight(.semibold))
+                    Text("closes with").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.dayEnds.enumerated()), id: \.offset) { _, d in
                         RankRow(value: "\(d.value)×", label: d.label,
@@ -389,7 +388,7 @@ struct DashboardView: View {
                     subtitle: "Sites on ≥80% of active days · how fast you return") {
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("DAILY FIXTURES").font(.caption.weight(.semibold))
+                    Text("daily fixtures").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.habitual.enumerated()), id: \.offset) { _, h in
                         RankRow(value: "\(h.value)d", label: h.label,
@@ -397,7 +396,7 @@ struct DashboardView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("RETURN SPEED").font(.caption.weight(.semibold))
+                    Text("return speed").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.returnGaps.enumerated()), id: \.offset) { _, g in
                         RankRow(value: g.extra
@@ -606,7 +605,7 @@ struct DashboardView: View {
                 Divider().overlay(BrowserTheme.divider)
                 HStack(alignment: .top, spacing: 28) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("BUSIEST DAYS").font(.caption.weight(.semibold))
+                        Text("busiest days").font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ForEach(Array(r.busiestDays.prefix(8).enumerated()),
                                 id: \.offset) { _, d in
@@ -616,7 +615,7 @@ struct DashboardView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("CONSISTENCY").font(.caption.weight(.semibold))
+                        Text("consistency").font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         RankRow(value: "\(r.longestStreak)d",
                                 label: "longest daily streak")
@@ -657,7 +656,7 @@ struct DashboardView: View {
                 }
                 if !r.rabbitHoles.isEmpty {
                     Divider().overlay(BrowserTheme.divider)
-                    Text("DEEPEST RABBIT HOLES").font(.caption.weight(.semibold))
+                    Text("deepest rabbit holes").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(Array(r.rabbitHoles.enumerated()), id: \.offset) { _, h in
                         RankRow(value: "\(h.domains) dom",
@@ -705,8 +704,7 @@ struct DashboardView: View {
                     .foregroundStyle(BrowserTheme.mintInk)
             }
             VStack(spacing: 10) {
-                Text("No history archived yet")
-                    .font(.largeTitle.bold()).foregroundStyle(BrowserTheme.ink)
+                SMDisplay("No history archived yet", size: 32)
                 Text("BrowserDaddy reads browser history into a permanent local archive. "
                      + "Connect a browser folder in Permissions, then sync.")
                     .foregroundStyle(BrowserTheme.secondaryInk)

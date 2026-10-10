@@ -1,4 +1,5 @@
 import SwiftUI
+import SaaSMakerUI
 import BrowserCore
 
 /// Installs link-router plumbing (GURL handler + global hotkeys) at launch.
@@ -275,8 +276,7 @@ struct BrowserDaddyApp: App {
                 }
             }
             .padding(24).frame(width: 480)
-            .preferredColorScheme(.dark)
-            .tint(BrowserTheme.action)
+            .smTheme(BrowserTheme.palette)
             .buttonStyle(DaddyButtonStyle())
         }
     }
@@ -295,8 +295,7 @@ struct BrowserDaddyApp: App {
                 }
             }
             .frame(minWidth: 920, minHeight: 620)
-            .preferredColorScheme(.dark)
-            .tint(BrowserTheme.action)
+            .smTheme(BrowserTheme.palette)
             .buttonStyle(DaddyButtonStyle())
         }
         .defaultSize(width: 1240, height: 800)
@@ -378,6 +377,7 @@ struct RootView: View {
             Button { model.runExtract() } label: {
                 Label(model.extracting ? "Syncing…" : "Sync History",
                       systemImage: "arrow.triangle.2.circlepath")
+                    .textCase(.lowercase)
                     .frame(maxWidth: .infinity).frame(height: 28)
             }
             .buttonStyle(DaddyButtonStyle(prominent: true))
@@ -403,7 +403,9 @@ struct RootView: View {
     }
 
     private func navigationHeading(_ title: String) -> some View {
-        Text(title).font(.system(size: 10, weight: .semibold)).tracking(1)
+        Text(title).textCase(.lowercase)
+            .font(.custom(BrowserTheme.palette.displayFont, size: 10).weight(.semibold))
+            .tracking(1)
             .foregroundStyle(BrowserTheme.secondaryInk)
             .padding(.horizontal, 10).padding(.vertical, 4)
     }
@@ -413,7 +415,7 @@ struct RootView: View {
             HStack {
                 Image(systemName: item.icon).frame(width: 20)
                     .foregroundStyle(BrowserTheme.mintInk)
-                Text(item.rawValue)
+                Text(item.rawValue).textCase(.lowercase)
                 Spacer()
             }
             .padding(.horizontal, 10)
@@ -458,9 +460,9 @@ struct RootView: View {
                 Text("\(r.totalVisits.formatted()) visits")
                     .monospacedDigit().foregroundStyle(BrowserTheme.secondaryInk)
             }
-            Text(model.watcher.isRunning ? "Watching focus" : "Watcher off")
-                .foregroundStyle(model.watcher.isRunning
-                                 ? BrowserTheme.mintInk : BrowserTheme.coral)
+            SMStatusPill(model.watcher.isRunning ? "watching focus" : "watcher off",
+                         tone: model.watcher.isRunning ? .success : .danger)
+                .accessibilityLabel(model.watcher.isRunning ? "Watching focus" : "Watcher off")
             Text("Local archive · optional external tagging").foregroundStyle(BrowserTheme.secondaryInk)
         }
         .font(.caption).padding(10)
@@ -486,7 +488,7 @@ struct RootView: View {
                 .foregroundStyle(BrowserTheme.secondaryInk)
             Text("Your archive stays on this Mac. Optional topic tagging sends selected browsing text to classifier.dev with your consent.")
                 .font(.callout).foregroundStyle(BrowserTheme.mintInk)
-            Button("Done") { model.showAbout = false }
+            Button("Done") { model.showAbout = false }.textCase(.lowercase)
                 .buttonStyle(DaddyButtonStyle(prominent: true))
         }
         .padding(32).frame(width: 340).background(Color.black)

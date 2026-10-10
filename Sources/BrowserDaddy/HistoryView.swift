@@ -1,6 +1,7 @@
 import AppKit
 import BrowserCore
 import SwiftUI
+import SaaSMakerUI
 
 struct HistoryView: View {
     @EnvironmentObject private var model: AppModel
@@ -41,11 +42,8 @@ struct HistoryView: View {
                 Text(resultSummary)
                     .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
                 if model.historyActiveFilterCount > 0 {
-                    Text("\(model.historyActiveFilterCount) active \(model.historyActiveFilterCount == 1 ? "filter" : "filters")")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color.black)
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(BrowserTheme.mintInk, in: Capsule())
+                    SMStatusPill("\(model.historyActiveFilterCount) active \(model.historyActiveFilterCount == 1 ? "filter" : "filters")",
+                                 tone: .brand)
                 }
                 Spacer()
             }
@@ -113,7 +111,7 @@ struct HistoryView: View {
 
     @ViewBuilder private var clearFilters: some View {
         if model.historyActiveFilterCount > 0 {
-            Button("Clear") { model.clearHistoryFilters() }
+            Button("Clear") { model.clearHistoryFilters() }.textCase(.lowercase)
                 .buttonStyle(DaddyButtonStyle())
                 .help("Clear all history filters; search text stays in place")
         }
@@ -193,11 +191,11 @@ struct HistoryView: View {
             detailLine("Page tag", scopedTag(row.pageCategory, row.pageTagSource))
             detailLine("Domain", scopedTag(row.domainCategory, row.domainTagSource))
             HStack(spacing: 8) {
-                Button { tagTarget = row } label: { Label("Retag", systemImage: "tag") }
+                Button { tagTarget = row } label: { Label("Retag", systemImage: "tag").textCase(.lowercase) }
                     .buttonStyle(DaddyButtonStyle(prominent: true))
-                Button { copy(row.url) } label: { Label("Copy URL", systemImage: "doc.on.doc") }
+                Button { copy(row.url) } label: { Label("Copy URL", systemImage: "doc.on.doc").textCase(.lowercase) }
                     .buttonStyle(DaddyButtonStyle())
-                Button { open(row.url) } label: { Label("Open", systemImage: "arrow.up.right.square") }
+                Button { open(row.url) } label: { Label("Open", systemImage: "arrow.up.right.square").textCase(.lowercase) }
                     .buttonStyle(DaddyButtonStyle())
                 Spacer()
                 Text("Local archive evidence")
@@ -209,7 +207,7 @@ struct HistoryView: View {
 
     private func detailLine(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(label.uppercased()).font(.caption2.weight(.semibold))
+            Text(label.lowercased()).font(.caption2.weight(.semibold))
                 .tracking(0.7).foregroundStyle(BrowserTheme.secondaryInk)
                 .frame(width: 58, alignment: .leading)
             Text(value).font(.caption).foregroundStyle(BrowserTheme.ink)
@@ -219,26 +217,25 @@ struct HistoryView: View {
     }
 
     @ViewBuilder private func rowActions(_ row: AppModel.HistoryRow) -> some View {
-        Button("Expand details") { expandedRow = row.id }
-        Button("Retag…") { tagTarget = row }
+        Button("Expand details") { expandedRow = row.id }.textCase(.lowercase)
+        Button("Retag…") { tagTarget = row }.textCase(.lowercase)
         Divider()
-        Button("Copy URL") { copy(row.url) }
-        Button("Open URL") { open(row.url) }
+        Button("Copy URL") { copy(row.url) }.textCase(.lowercase)
+        Button("Open URL") { open(row.url) }.textCase(.lowercase)
     }
 
     private var emptyState: some View {
         VStack(spacing: 18) {
             Spacer()
             DaddyArtwork().frame(width: 72, height: 72)
-            Text(model.report == nil || model.report?.totalVisits == 0
-                 ? "Nothing archived yet" : "No matches")
-                .font(.title2.bold()).foregroundStyle(BrowserTheme.ink)
+            SMDisplay(model.report == nil || model.report?.totalVisits == 0
+                      ? "Nothing archived yet" : "No matches", size: 22)
             Text(model.report == nil || model.report?.totalVisits == 0
                  ? "Connect a browser folder in Permissions, then sync history."
                  : "Search and filters combine. Clear them to return to the full archive.")
                 .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
             if model.historyActiveFilterCount > 0 {
-                Button("Clear filters") { model.clearHistoryFilters() }
+                Button("Clear filters") { model.clearHistoryFilters() }.textCase(.lowercase)
                     .buttonStyle(DaddyButtonStyle(prominent: true))
             }
             Spacer()
@@ -296,7 +293,7 @@ private struct HistoryTagSheet: View {
             HStack(alignment: .top, spacing: 12) {
                 DaddyArtwork(brand: true).frame(width: 36, height: 36)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Retag this visit").font(.title2.bold()).foregroundStyle(BrowserTheme.ink)
+                    SMSectionHeader("Retag this visit", size: 22)
                     Text(row.host).font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                 }
                 Spacer()
@@ -304,7 +301,7 @@ private struct HistoryTagSheet: View {
             Text("Choose how broadly the local override applies. Browser history is never changed, and saving here makes no network request.")
                 .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
             VStack(alignment: .leading, spacing: 8) {
-                Text("SCOPE").font(.caption2.weight(.semibold)).tracking(0.8)
+                Text("SCOPE").textCase(.lowercase).font(.caption2.weight(.semibold)).tracking(0.8)
                     .foregroundStyle(BrowserTheme.secondaryInk)
                 Picker("Scope", selection: $scope) {
                     ForEach(AppModel.HistoryTagScope.allCases) { value in
@@ -314,7 +311,7 @@ private struct HistoryTagSheet: View {
                 Text(scopeExplanation).font(.caption).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text("CATEGORY").font(.caption2.weight(.semibold)).tracking(0.8)
+                Text("CATEGORY").textCase(.lowercase).font(.caption2.weight(.semibold)).tracking(0.8)
                     .foregroundStyle(BrowserTheme.secondaryInk)
                 Picker("Category", selection: $category) {
                     ForEach(labels, id: \.self) { Text($0).tag($0) }
@@ -333,13 +330,13 @@ private struct HistoryTagSheet: View {
             HStack {
                 Button("Clear this scope") {
                     if model.clearHistoryTag(row, scope: scope) { dismiss() }
-                }.buttonStyle(DaddyButtonStyle())
+                }.textCase(.lowercase).buttonStyle(DaddyButtonStyle())
                     .help("Remove only the derived tag at this scope; visits remain archived")
                 Spacer()
-                Button("Cancel") { dismiss() }.buttonStyle(DaddyButtonStyle())
+                Button("Cancel") { dismiss() }.textCase(.lowercase).buttonStyle(DaddyButtonStyle())
                 Button("Save local tag") {
                     if model.setHistoryTag(row, scope: scope, category: category) { dismiss() }
-                }.buttonStyle(DaddyButtonStyle(prominent: true))
+                }.textCase(.lowercase).buttonStyle(DaddyButtonStyle(prominent: true))
             }
             Text(model.classifyOptin
                  ? "Optional external classification is enabled separately. It only runs when you choose Tag in Permissions."

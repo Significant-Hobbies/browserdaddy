@@ -64,7 +64,7 @@ struct AlertSettingsView: View {
                         var c = model.alertConfig
                         c.siteCaps.removeValue(forKey: host)
                         model.setAlertConfig(c)
-                    }
+                    }.textCase(.lowercase)
                 }
             }
             HStack {
@@ -89,7 +89,7 @@ struct AlertSettingsView: View {
                     c.siteCaps[host] = capMinutes
                     model.setAlertConfig(c)
                     capHost = ""
-                }
+                }.textCase(.lowercase)
                 .disabled(capHost.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Text("Site caps use captured tab URLs — Chromium browsers only; "

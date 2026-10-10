@@ -8,16 +8,24 @@ fi
 sh scripts/build-icon.sh
 swift build --product BrowserDaddy
 bin_path="$(swift build --show-bin-path)"
+ui_resources="$bin_path/SaaSMakerUI_SaaSMakerUI.bundle"
+if [ ! -d "$ui_resources" ]; then
+    echo "Missing SaaSMakerUI_SaaSMakerUI.bundle in build products; rebuild before packaging." >&2
+    exit 1
+fi
 bundle_path="$PWD/.build/BrowserDaddy.app"
 mkdir -p "$bundle_path/Contents/MacOS" "$bundle_path/Contents/Resources"
 cp "$bin_path/BrowserDaddy" "$bundle_path/Contents/MacOS/BrowserDaddy"
 cp Support/Info.plist "$bundle_path/Contents/Info.plist"
 cp Support/BrowserDaddy.icns "$bundle_path/Contents/Resources/BrowserDaddy.icns"
+cp -R "$ui_resources" "$bundle_path/Contents/Resources/"
 cp -R "$bin_path/BrowserDaddy_BrowserDaddy.bundle" "$bundle_path/Contents/Resources/" 2>/dev/null || true
 # Sparkle is dynamic — the linker rpath expects it in Contents/Frameworks.
 # Fresh copy each run: cp -R merges into an existing dir and was leaving
 # flattened framework contents alongside it (breaks codesign --deep).
-rm -rf "$bundle_path/Contents/Frameworks"
+if [ -d "$bundle_path/Contents/Frameworks" ]; then
+    /usr/bin/trash "$bundle_path/Contents/Frameworks"
+fi
 mkdir -p "$bundle_path/Contents/Frameworks"
 cp -R "$bin_path/Sparkle.framework" "$bundle_path/Contents/Frameworks/" 2>/dev/null || true
 xcodebuild -project SafariTabsExtension/SafariTabsExtension.xcodeproj \

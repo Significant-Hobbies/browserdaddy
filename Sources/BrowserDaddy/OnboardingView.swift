@@ -1,4 +1,5 @@
 import SwiftUI
+import SaaSMakerUI
 import BrowserCore
 
 /// First-run flow: grant access, understand what's collected, opt into
@@ -7,21 +8,21 @@ struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            VStack(alignment: .leading, spacing: 26) {
-                header
-                access
-                honesty
-                tagging
-                footer
+        ScrollView {
+            SMCard(padding: 40) {
+                VStack(alignment: .leading, spacing: 26) {
+                    header
+                    access
+                    honesty
+                    tagging
+                    footer
+                }
             }
-            .padding(40)
-            .frame(width: 640)
-            .background(RoundedRectangle(cornerRadius: 18)
-                .fill(BrowserTheme.surface))
-            Spacer()
+            .frame(maxWidth: 640)
+            .padding(28)
+            .frame(maxWidth: .infinity)
         }
+        .defaultScrollAnchor(.center, for: .alignment)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(BrowserTheme.fog)
         .onAppear { model.refreshPermissions() }
@@ -31,8 +32,7 @@ struct OnboardingView: View {
         HStack(spacing: 14) {
             DaddyArtwork(brand: true).frame(width: 44, height: 44)
             VStack(alignment: .leading, spacing: 3) {
-                Text("browserdaddy").font(.title2.weight(.bold))
-                    .foregroundStyle(BrowserTheme.ink)
+                SMSectionHeader("browserdaddy", size: 22)
                 Text("archive your history. watch your attention.")
                     .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
             }
@@ -41,7 +41,7 @@ struct OnboardingView: View {
 
     private var access: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("ACCESS").font(.caption.weight(.semibold))
+            Text("ACCESS").textCase(.lowercase).font(.caption.weight(.semibold))
                 .foregroundStyle(BrowserTheme.secondaryInk)
             Text("Choose only the browser folders you want archived. Access is "
                  + "read-only, can be removed later, and never includes the rest of your disk.")
@@ -51,7 +51,7 @@ struct OnboardingView: View {
                 .font(.caption).foregroundStyle(BrowserTheme.mintInk)
             Button("Connect all detected browsers") {
                 model.connectAllBrowsers()
-            }
+            }.textCase(.lowercase)
             .buttonStyle(DaddyButtonStyle(prominent: true))
             .disabled(model.browserAccess.isEmpty)
             ForEach(model.browserAccess) { status in
@@ -76,7 +76,7 @@ struct OnboardingView: View {
 
     private var honesty: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("WHAT IT DOES").font(.caption.weight(.semibold))
+            Text("WHAT IT DOES").textCase(.lowercase).font(.caption.weight(.semibold))
                 .foregroundStyle(BrowserTheme.secondaryInk)
             Label("Archives history permanently — survives browser pruning.",
                   systemImage: "archivebox")
@@ -92,7 +92,7 @@ struct OnboardingView: View {
 
     private var tagging: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("OPTIONAL — TOPIC TAGGING").font(.caption.weight(.semibold))
+            Text("OPTIONAL — TOPIC TAGGING").textCase(.lowercase).font(.caption.weight(.semibold))
                 .foregroundStyle(BrowserTheme.secondaryInk)
             Text(Classifier.disclosure)
                 .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
@@ -105,7 +105,7 @@ struct OnboardingView: View {
                 HStack(spacing: 12) {
                     Button(model.classifying ? "Tagging…" : "Tag now") {
                         model.runClassification()
-                    }
+                    }.textCase(.lowercase)
                     .disabled(model.classifying)
                     .buttonStyle(PrimaryActionButtonStyle())
                     if !model.classifySummary.isEmpty {
@@ -127,7 +127,7 @@ struct OnboardingView: View {
             Spacer()
             Button(model.hasConnectedBrowser ? "Start watching" : "Continue without history") {
                 model.finishOnboarding()
-            }
+            }.textCase(.lowercase)
             .buttonStyle(PrimaryActionButtonStyle())
             .controlSize(.large)
         }
@@ -160,7 +160,7 @@ struct OnboardingView: View {
             }
             Spacer()
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
+                Button(actionTitle, action: action).textCase(.lowercase)
                     .buttonStyle(DaddyButtonStyle())
             }
         }

@@ -1,5 +1,5 @@
 {
-  "originHash" : "af4f6100175662439b3f1a15deef792d00b715fea116ab9a7190d50dc2291e32",
+  "originHash" : "b8ee4f2ed28357e389f88699e09631fd18255c80959569b114fb3550bd295bed",
   "pins" : [
     {
       "identity" : "sparkle",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a",
         "version" : "2.9.6"
+      }
+    },
+    {
+      "identity" : "ui-library",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sass-maker/ui-library",
+      "state" : {
+        "revision" : "1c01ca58049ce7534117248e8dbd284bb5269e36",
+        "version" : "0.1.17"
       }
     }
   ],

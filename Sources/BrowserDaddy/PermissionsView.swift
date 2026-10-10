@@ -35,7 +35,7 @@ struct PermissionsView: View {
                     Spacer()
                     Button("Connect all detected browsers") {
                         model.connectAllBrowsers()
-                    }
+                    }.textCase(.lowercase)
                 }
                 if !model.browserAccessError.isEmpty {
                     Text(model.browserAccessError)
@@ -59,9 +59,9 @@ struct PermissionsView: View {
             Spacer()
             Button(accessButtonTitle(status.state)) {
                 model.connectBrowser(status.kind)
-            }
+            }.textCase(.lowercase)
             if case .connected = status.state {
-                Button("Disconnect") { model.removeBrowser(status.kind) }
+                Button("Disconnect") { model.removeBrowser(status.kind) }.textCase(.lowercase)
             }
         }
         .padding(.vertical, 2)
@@ -97,14 +97,14 @@ struct PermissionsView: View {
                     Spacer()
                     Button("Open Safari Extensions") {
                         SafariTabsBridge.openPreferences()
-                    }
+                    }.textCase(.lowercase)
                 }
                 HStack {
                     Spacer()
-                    Button("Re-check") { model.refreshPermissions() }
+                    Button("Re-check") { model.refreshPermissions() }.textCase(.lowercase)
                     Button("Open Automation Settings") {
                         Permissions.openAutomationSettings()
-                    }
+                    }.textCase(.lowercase)
                 }
             }
         }
@@ -121,7 +121,7 @@ struct PermissionsView: View {
                 HStack(spacing: 12) {
                     Button(model.extracting ? "Syncing…" : "Sync history now") {
                         model.runExtract()
-                    }
+                    }.textCase(.lowercase)
                     .buttonStyle(DaddyButtonStyle(prominent: true))
                     .disabled(model.extracting)
                     if model.extracting { ProgressView().controlSize(.small) }
@@ -158,7 +158,7 @@ struct PermissionsView: View {
                 HStack(spacing: 12) {
                     Button(model.classifying ? "Tagging…" : "Tag new domains + pages") {
                         model.runClassification()
-                    }
+                    }.textCase(.lowercase)
                     .disabled(model.classifying || !model.classifyOptin)
                     .buttonStyle(DaddyButtonStyle(prominent: true))
                     if model.classifying {
@@ -193,7 +193,7 @@ struct PermissionsView: View {
                 Button("Reveal") {
                     NSWorkspace.shared.activateFileViewerSelecting(
                         [ArchiveStore.defaultURL])
-                }
+                }.textCase(.lowercase)
             }
         }
     }

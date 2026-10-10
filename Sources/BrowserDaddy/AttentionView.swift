@@ -1,4 +1,5 @@
 import SwiftUI
+import SaaSMakerUI
 import BrowserCore
 
 /// The live attention surface — everything the focus watcher sees.
@@ -50,7 +51,7 @@ struct AttentionView: View {
             }
             VStack(alignment: .leading, spacing: 7) {
                 Text(model.nowApp.isEmpty ? "Watching…" : model.nowApp)
-                    .font(.largeTitle.bold())
+                    .font(.custom(BrowserTheme.palette.displayFont, size: 32).weight(.bold))
                     .foregroundStyle(BrowserTheme.ink)
                     .accessibilityAddTraits(.isHeader)
                 if !model.nowURL.isEmpty {
@@ -200,7 +201,7 @@ struct AttentionView: View {
                 }
                 if !model.attentionSitesDetail.isEmpty {
                     Divider().overlay(BrowserTheme.divider)
-                    Text("BY SITE").font(.caption.weight(.semibold))
+                    Text("by site").font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     let totS = model.attentionSitesDetail.reduce(0) { $0 + $1.value }
                     ForEach(Array(model.attentionSitesDetail.prefix(12).enumerated()),

@@ -26,8 +26,11 @@ def main():
     products = args.products.resolve()
     binary = products / "BrowserDaddy"
     resources = products / "BrowserDaddy_BrowserDaddy.bundle"
+    ui_resources = products / "SaaSMakerUI_SaaSMakerUI.bundle"
     if products.name != "Release" or not binary.is_file() or not resources.is_dir():
         raise SystemExit("Expected existing Release binary and resource bundle")
+    if not ui_resources.is_dir():
+        raise SystemExit("Missing SaaSMakerUI_SaaSMakerUI.bundle in build products; rebuild before packaging")
     if args.build < 1 or not all(part.isdigit() for part in args.version.split(".")):
         raise SystemExit("Version must be numeric; build must be positive")
     sources = list((ROOT / "Sources").rglob("*.swift")) + [ROOT / "Package.swift"]
@@ -49,6 +52,7 @@ def main():
     (contents / "Resources").mkdir()
     shutil.copy2(binary, contents / "MacOS/BrowserDaddy")
     shutil.copytree(resources, contents / "Resources" / resources.name)
+    shutil.copytree(ui_resources, contents / "Resources" / ui_resources.name)
     shutil.copy2(ROOT / "Support/BrowserDaddy.icns", contents / "Resources/BrowserDaddy.icns")
     shutil.copy2(ROOT / "Support/container-migration.plist",
                  contents / "Resources/container-migration.plist")
