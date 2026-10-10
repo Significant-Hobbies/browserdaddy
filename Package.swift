@@ -15,12 +15,12 @@ let package = Package(
         .library(name: "BrowserCore", targets: ["BrowserCore"]),
         .executable(name: "BrowserDaddy", targets: ["BrowserDaddy"]),
     ],
-    dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6")],
+    dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"), .package(url: "https://github.com/sass-maker/ui-library", from: "0.1.14")],
     targets: [
         .target(name: "BrowserCore"),
         .executableTarget(
             name: "BrowserDaddy",
-            dependencies: ["BrowserCore", .product(name: "Sparkle", package: "Sparkle")],
+            dependencies: [.product(name: "SaaSMakerUI", package: "ui-library"), "BrowserCore", .product(name: "Sparkle", package: "Sparkle")],
             exclude: ["Resources/StorageDaddy.png", "Resources/PageDoodles.png"],
             resources: [.process("Resources")],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]

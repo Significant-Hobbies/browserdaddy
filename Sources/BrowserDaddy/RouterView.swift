@@ -49,7 +49,7 @@ struct RouterView: View {
                         Button("Make BrowserDaddy default") {
                             model.makeDefaultBrowser()
                             defaultHandlerID = model.currentDefaultHandlerID
-                        }
+                        }.textCase(.lowercase)
                         .buttonStyle(DaddyButtonStyle(prominent: true))
                     }
                 }
@@ -82,7 +82,7 @@ struct RouterView: View {
                             target: cfg.fallback))
                         model.setRouterConfig(cfg)
                         draftPattern = ""
-                    }
+                    }.textCase(.lowercase)
                     .disabled(draftPattern.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 if model.routerConfig.rules.isEmpty {
@@ -131,7 +131,7 @@ struct RouterView: View {
                 var cfg = model.routerConfig
                 cfg.rules.removeAll { $0.id == rule.id }
                 model.setRouterConfig(cfg)
-            }
+            }.textCase(.lowercase)
         }
     }
 
@@ -181,7 +181,7 @@ struct RouterView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 130)
                                 .onSubmit { addManualProfile(kind) }
-                            Button("Add") { addManualProfile(kind) }
+                            Button("Add") { addManualProfile(kind) }.textCase(.lowercase)
                                 .disabled((manualProfile[kind] ?? "")
                                     .trimmingCharacters(in: .whitespaces).isEmpty)
                         } else {
@@ -209,8 +209,8 @@ struct RouterView: View {
                      + "only appears when you ask for it.")
                     .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
                 HStack(spacing: 12) {
-                    Button("Open clipboard link") { model.openClipboardLink() }
-                    Button("Move current tab here") { model.moveCurrentTab() }
+                    Button("Open clipboard link") { model.openClipboardLink() }.textCase(.lowercase)
+                    Button("Move current tab here") { model.moveCurrentTab() }.textCase(.lowercase)
                 }
                 Text("\(LinkRouterService.clipboardKey.name) — open the "
                      + "copied link in a browser you pick\n"
