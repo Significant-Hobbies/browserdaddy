@@ -26,12 +26,7 @@ enum SafariTabsBridge {
         guard !NSRunningApplication.runningApplications(
             withBundleIdentifier: BrowserKind.safari.bundleIdentifier).isEmpty
         else { return .notRunning }
-        let enabled = await withCheckedContinuation { continuation in
-            SFSafariExtensionManager.getStateOfSafariExtension(
-                withIdentifier: extensionID) { state, _ in
-                    continuation.resume(returning: state?.isEnabled == true)
-                }
-        }
+        let enabled = await extensionEnabled()
         guard enabled else { return .needsConsent }
         guard let snapshotURL else {
             return .failed("Safari tab sharing is unavailable")
@@ -112,13 +107,28 @@ enum SafariTabsBridge {
             withIdentifier: extensionID, completionHandler: nil)
     }
 
+    /// Safari replies on its XPC queue, not the caller's actor. Keep the
+    /// callback sendable so Swift never asserts main-actor isolation there.
+    static func extensionEnabled(
+        getState: @Sendable (String, @escaping @Sendable (SFSafariExtensionState?, Error?) -> Void) -> Void = {
+            SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier: $0,
+                                                               completionHandler: $1)
+        }
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            getState(extensionID) { @Sendable state, _ in
+                continuation.resume(returning: state?.isEnabled == true)
+            }
+        }
+    }
+
     private static func dispatch(_ name: String,
                                  userInfo: [String: Any]) async -> Error? {
         await withCheckedContinuation { continuation in
             SFSafariApplication.dispatchMessage(
                 withName: name,
                 toExtensionWithIdentifier: extensionID,
-                userInfo: userInfo) { error in
+                userInfo: userInfo) { @Sendable error in
                     continuation.resume(returning: error)
                 }
         }
