@@ -16,6 +16,7 @@ final class BrowserDaddyAppDelegate: NSObject, NSApplicationDelegate {
     /// Launch stays windowless with one exception: an un-onboarded app
     /// opens its window so first-run setup is reachable without digging.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !BrowserStartupCheck.enabled else { return }
         for delay in [0.8, 2.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 guard BrowserDaddyRuntime.startup.model?.needsOnboarding == true,
@@ -68,7 +69,7 @@ final class AppStartup: ObservableObject {
     @Published private(set) var model: AppModel?
     init(openArchive: () throws -> ArchiveStore = { try ArchiveStore() }) {
         do {
-            if CommandLine.arguments.contains("--preview-fixture")
+            if BrowserStartupCheck.enabled || CommandLine.arguments.contains("--preview-fixture")
                 || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true {
                 let fixture = AppModel(store: try PreviewArchive.make(),
                                        startCollection: {}, previewFixture: true)
@@ -92,6 +93,7 @@ private enum BrowserDaddyRuntime {
     static let updates = AppUpdates()
 
     static func start() {
+        guard !BrowserStartupCheck.enabled else { return }
         if let model = startup.model { updates.start(model: model) }
         LinkRouterService.shared.install()
     }
@@ -237,6 +239,21 @@ private struct MenuBarIcon: View {
 }
 
 @main
+enum BrowserDaddyMain {
+    @MainActor
+    static func main() {
+        if CommandLine.arguments.contains("--check-ui-resources") {
+            guard BrowserUIResources.loaded else {
+                FileHandle.standardError.write(Data("BrowserDaddy UI resources missing or invalid\n".utf8))
+                exit(EXIT_FAILURE)
+            }
+            print("BrowserDaddy UI resources loaded")
+            return
+        }
+        BrowserDaddyApp.main()
+    }
+}
+
 struct BrowserDaddyApp: App {
     @NSApplicationDelegateAdaptor(BrowserDaddyAppDelegate.self)
         private var appDelegate
@@ -253,7 +270,7 @@ struct BrowserDaddyApp: App {
         // Never create this window on launch — a GURL-launched copy is a
         // routing pipe, not a UI session. It exists only after an explicit
         // open (menu item, Dock/⌘-tab reopen).
-        mainWindow.defaultLaunchBehavior(.suppressed)
+        mainWindow.defaultLaunchBehavior(BrowserStartupCheck.enabled ? .presented : .suppressed)
 
         Settings {
             Group {
@@ -276,7 +293,7 @@ struct BrowserDaddyApp: App {
                 }
             }
             .padding(24).frame(width: 480)
-            .smTheme(BrowserTheme.palette)
+            .browserTheme(BrowserTheme.palette)
             .buttonStyle(DaddyButtonStyle())
         }
     }
@@ -295,7 +312,8 @@ struct BrowserDaddyApp: App {
                 }
             }
             .frame(minWidth: 920, minHeight: 620)
-            .smTheme(BrowserTheme.palette)
+            .onAppear { BrowserStartupCheck.windowAppeared() }
+            .browserTheme(BrowserTheme.palette)
             .buttonStyle(DaddyButtonStyle())
         }
         .defaultSize(width: 1240, height: 800)

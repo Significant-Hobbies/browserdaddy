@@ -7,6 +7,7 @@ import plistlib
 import shutil
 import subprocess
 import sparkle_support
+import ui_resources
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,6 +88,7 @@ def main():
     run("codesign", "--force", "--sign", args.identity, "--timestamp", "--options", "runtime",
         "--entitlements", ROOT / "Support/Release.entitlements", app)
     run("codesign", "--verify", "--deep", "--strict", app)
+    ui_resources.check_startup(binary, app, "BrowserDaddy")
     (stage / "Applications").symlink_to("/Applications")
     dmg = output / f"BrowserDaddy-{args.version}-{args.build}-universal.dmg"
     run("hdiutil", "create", "-volname", "BrowserDaddy", "-srcfolder", stage, "-format", "UDZO", dmg)
