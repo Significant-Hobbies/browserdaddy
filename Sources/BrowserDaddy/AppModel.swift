@@ -312,11 +312,15 @@ final class AppModel: ObservableObject {
     }
 
     private func clipboardURL() -> URL? {
-        guard let raw = NSPasteboard.general.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
+        Self.clipboardURL(from: NSPasteboard.general.string(forType: .string))
+    }
+
+    static func clipboardURL(from value: String?) -> URL? {
+        guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines),
             let url = URL(string: raw),
             let scheme = url.scheme?.lowercased(),
-            scheme == "http" || scheme == "https"
+            scheme == "http" || scheme == "https",
+            let host = url.host, !host.isEmpty
         else { return nil }
         return url
     }
