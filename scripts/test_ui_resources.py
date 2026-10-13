@@ -38,3 +38,40 @@ class UIResourceProbeTests(unittest.TestCase):
                         ui_resources.check_startup(root / "Fixture", root / "Fixture.app", "Fixture")
                 self.assertEqual(calls, ["--check-ui-resources", "--check-app-startup"])
                 self.assertEqual((bundle / "font.ttf").read_bytes(), b"fixture")
+
+
+class UniversalFontStagingTests(unittest.TestCase):
+    def fixture(self, root):
+        bundles = []
+        for architecture in ("arm64", "x86_64"):
+            bundle = root / ".build" / f"daddy-release-{architecture}" / "Products/Release" / ui_resources.UI_BUNDLE
+            bundle.mkdir(parents=True)
+            (bundle / "font.ttf").write_bytes(b"matching font")
+            bundles.append(bundle)
+        return bundles
+
+    def test_matching_architectures_copy_verified_fonts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bundles = self.fixture(root)
+            output = root / "universal/Release"
+            output.mkdir(parents=True)
+            ui_resources.stage_universal_fonts(root, output)
+            self.assertEqual(ui_resources.bundle_hashes(output / ui_resources.UI_BUNDLE),
+                             ui_resources.bundle_hashes(bundles[0]))
+
+    def test_mismatched_architectures_do_not_create_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bundles = self.fixture(root)
+            (bundles[1] / "font.ttf").write_bytes(b"different font")
+            output = root / "universal/Release"
+            with self.assertRaisesRegex(SystemExit, "differ between architectures"):
+                ui_resources.stage_universal_fonts(root, output)
+            self.assertFalse(output.exists())
+
+    def test_missing_architecture_is_rejected_before_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with self.assertRaisesRegex(SystemExit, "arm64 Release"):
+                ui_resources.stage_universal_fonts(root, root / "universal/Release")
