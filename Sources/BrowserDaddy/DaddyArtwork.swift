@@ -30,6 +30,10 @@ enum DaddyResources {
             Bundle.main.bundleURL.appendingPathComponent(name),
             URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent(name)
         ]
+        // Native SwiftPM runs XCTest from a host outside the products folder.
+        // Loaded test/framework bundles still identify their sibling resources.
+        locations += ([Bundle(for: DaddyResourceAnchor.self)] + Bundle.allBundles + Bundle.allFrameworks)
+            .map { $0.bundleURL.deletingLastPathComponent().appendingPathComponent(name) }
         #if DEBUG
         if let path = ProcessInfo.processInfo.environment["PACKAGE_RESOURCE_BUNDLE_PATH"]
             ?? ProcessInfo.processInfo.environment["PACKAGE_RESOURCE_BUNDLE_URL"] {
