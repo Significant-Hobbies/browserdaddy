@@ -6,7 +6,11 @@ import SwiftUI
 /// fallback target, profiles, and the explicit picker actions.
 struct RouterView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var defaultHandlerID = ""
+    @State private var defaultHTTPHandlerID = ""
+    @State private var defaultHTTPSHandlerID = ""
+    @State private var changingDefault = false
+    @State private var defaultChangeMessage: String?
+    @State private var defaultChangeFailed = false
     @State private var draftPattern = ""
     @State private var manualProfile: [BrowserKind: String] = [:]
 
@@ -23,7 +27,7 @@ struct RouterView: View {
             .frame(maxWidth: 860, alignment: .leading)
         }
         .background(BrowserTheme.fog)
-        .onAppear { defaultHandlerID = model.currentDefaultHandlerID }
+        .onAppear { refreshDefaultHandlers() }
     }
 
     // MARK: bands
@@ -46,12 +50,31 @@ struct RouterView: View {
                         .foregroundStyle(BrowserTheme.secondaryInk)
                     Spacer()
                     if !isDefault {
-                        Button("Make BrowserDaddy default") {
-                            model.makeDefaultBrowser()
-                            defaultHandlerID = model.currentDefaultHandlerID
+                        Button(changingDefault ? "Setting default…" : "Make BrowserDaddy default") {
+                            changingDefault = true
+                            defaultChangeFailed = false
+                            defaultChangeMessage = "Waiting for macOS to confirm the change…"
+                            Task {
+                                do {
+                                    try await model.makeDefaultBrowser()
+                                    defaultChangeMessage = "BrowserDaddy is now the default for web links."
+                                } catch {
+                                    defaultChangeFailed = true
+                                    defaultChangeMessage = "Could not set the default browser: \(error.localizedDescription)"
+                                }
+                                refreshDefaultHandlers()
+                                changingDefault = false
+                            }
                         }.textCase(.lowercase)
                         .buttonStyle(DaddyButtonStyle(prominent: true))
+                        .disabled(changingDefault)
                     }
+                }
+                if let defaultChangeMessage {
+                    Text(defaultChangeMessage)
+                        .font(.caption)
+                        .foregroundStyle(defaultChangeFailed ? BrowserTheme.coral : BrowserTheme.secondaryInk)
+                        .accessibilityAddTraits(.updatesFrequently)
                 }
                 Text(isDefault
                      ? "Clicked links arrive here silently — first rule match wins, everything else goes to the fallback."
@@ -275,10 +298,16 @@ struct RouterView: View {
     // MARK: helpers
 
     private var isDefault: Bool {
-        defaultHandlerID == Bundle.main.bundleIdentifier
+        let bundleID = Bundle.main.bundleIdentifier
+        return bundleID != nil && defaultHTTPHandlerID == bundleID
+            && defaultHTTPSHandlerID == bundleID
     }
 
     private var defaultHandlerLabel: String {
+        if defaultHTTPHandlerID != defaultHTTPSHandlerID {
+            return "mixed HTTP/HTTPS"
+        }
+        let defaultHandlerID = defaultHTTPSHandlerID
         guard !defaultHandlerID.isEmpty else { return "unknown" }
         if isDefault { return "BrowserDaddy" }
         if let url = NSWorkspace.shared.urlForApplication(
@@ -287,6 +316,11 @@ struct RouterView: View {
                 .displayName(atPath: url.deletingPathExtension().lastPathComponent)
         }
         return defaultHandlerID
+    }
+
+    private func refreshDefaultHandlers() {
+        defaultHTTPHandlerID = model.defaultHandlerID(for: "http")
+        defaultHTTPSHandlerID = model.defaultHandlerID(for: "https")
     }
 
     private func binding(for rule: RouteRule) -> Binding<RouteRule> {

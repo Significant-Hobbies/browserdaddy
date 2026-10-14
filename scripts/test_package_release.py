@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import sparkle_support
+import ui_resources
 
 SCRIPTS = Path(__file__).resolve().parent
 UI_BUNDLE = "SaaSMakerUI_SaaSMakerUI.bundle"
@@ -70,6 +71,35 @@ class ResourcePackagingTests(unittest.TestCase):
             resources = root / "output/image-contents/BrowserDaddy.app/Contents/Resources"
             self.assertEqual((resources / UI_BUNDLE / "Contents/Resources/Fonts/Geist.ttf").read_bytes(), b"synthetic font")
             self.assertTrue((resources / "BrowserDaddy_BrowserDaddy.bundle/Contents/Resources/BrowserDaddyIcon.png").is_file())
+
+    def test_reaches_startup_check_after_signing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            products, _ = self.release_fixture(root)
+            (products / UI_BUNDLE).mkdir()
+            namespace = runpy.run_path(str(SCRIPTS / "package-release.py"))
+            main = namespace["main"]
+            main.__globals__["ROOT"] = root
+
+            def fake_run(*args):
+                if args[0] == "xcodebuild":
+                    extension = root / "output/safari-extension-build/Release/SafariTabsExtension.appex/Contents"
+                    extension.mkdir(parents=True)
+                    (extension / "Info.plist").write_bytes(plistlib.dumps({}))
+
+            main.__globals__["run"] = fake_run
+            args = ["package-release.py", "--products", str(products), "--output",
+                    str(root / "output"), "--identity", "synthetic", "--version", "1.2.3", "--build", "4"]
+            with patch.object(sys, "argv", args), \
+                 patch.object(sparkle_support, "configuration", return_value={}), \
+                 patch.object(sparkle_support, "embed"), \
+                 patch.object(sparkle_support, "sign"), \
+                 patch.object(ui_resources, "check_startup", side_effect=StagingComplete) as startup:
+                with self.assertRaises(StagingComplete):
+                    main()
+            startup.assert_called_once_with((products / "BrowserDaddy").resolve(),
+                                            (root / "output/image-contents/BrowserDaddy.app").resolve(),
+                                            "BrowserDaddy")
 
     def test_missing_bundle_fails_before_creating_output(self):
         for is_file in (False, True):

@@ -27,10 +27,10 @@ def main():
     products = args.products.resolve()
     binary = products / "BrowserDaddy"
     resources = products / "BrowserDaddy_BrowserDaddy.bundle"
-    ui_resources = products / "SaaSMakerUI_SaaSMakerUI.bundle"
+    ui_bundle = products / "SaaSMakerUI_SaaSMakerUI.bundle"
     if products.name != "Release" or not binary.is_file() or not resources.is_dir():
         raise SystemExit("Expected existing Release binary and resource bundle")
-    if not ui_resources.is_dir():
+    if not ui_bundle.is_dir():
         raise SystemExit("Missing SaaSMakerUI_SaaSMakerUI.bundle in build products; rebuild before packaging")
     if args.build < 1 or not all(part.isdigit() for part in args.version.split(".")):
         raise SystemExit("Version must be numeric; build must be positive")
@@ -53,7 +53,7 @@ def main():
     (contents / "Resources").mkdir()
     shutil.copy2(binary, contents / "MacOS/BrowserDaddy")
     shutil.copytree(resources, contents / "Resources" / resources.name)
-    shutil.copytree(ui_resources, contents / "Resources" / ui_resources.name)
+    shutil.copytree(ui_bundle, contents / "Resources" / ui_bundle.name)
     shutil.copy2(ROOT / "Support/BrowserDaddy.icns", contents / "Resources/BrowserDaddy.icns")
     shutil.copy2(ROOT / "Support/container-migration.plist",
                  contents / "Resources/container-migration.plist")
