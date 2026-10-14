@@ -6,8 +6,8 @@ import SwiftUI
 /// fallback target, profiles, and the explicit picker actions.
 struct RouterView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var defaultHTTPHandlerID = ""
-    @State private var defaultHTTPSHandlerID = ""
+    @State private var defaultHTTPHandlerURL: URL?
+    @State private var defaultHTTPSHandlerURL: URL?
     @State private var changingDefault = false
     @State private var defaultChangeMessage: String?
     @State private var defaultChangeFailed = false
@@ -301,15 +301,34 @@ struct RouterView: View {
         let bundleID = Bundle.main.bundleIdentifier
         return bundleID != nil && defaultHTTPHandlerID == bundleID
             && defaultHTTPSHandlerID == bundleID
+            && DefaultBrowserRegistration.isSameApplication(
+                defaultHTTPHandlerURL, as: Bundle.main.bundleURL)
+            && DefaultBrowserRegistration.isSameApplication(
+                defaultHTTPSHandlerURL, as: Bundle.main.bundleURL)
+    }
+
+    private var defaultHTTPHandlerID: String {
+        defaultHTTPHandlerURL.flatMap { Bundle(url: $0)?.bundleIdentifier } ?? ""
+    }
+
+    private var defaultHTTPSHandlerID: String {
+        defaultHTTPSHandlerURL.flatMap { Bundle(url: $0)?.bundleIdentifier } ?? ""
     }
 
     private var defaultHandlerLabel: String {
         if defaultHTTPHandlerID != defaultHTTPSHandlerID {
             return "mixed HTTP/HTTPS"
         }
+        if let http = defaultHTTPHandlerURL, let https = defaultHTTPSHandlerURL,
+           !DefaultBrowserRegistration.isSameApplication(http, as: https) {
+            return "mixed HTTP/HTTPS"
+        }
         let defaultHandlerID = defaultHTTPSHandlerID
         guard !defaultHandlerID.isEmpty else { return "unknown" }
         if isDefault { return "BrowserDaddy" }
+        if defaultHandlerID == Bundle.main.bundleIdentifier {
+            return "BrowserDaddy (another copy)"
+        }
         if let url = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: defaultHandlerID) {
             return FileManager.default
@@ -319,8 +338,8 @@ struct RouterView: View {
     }
 
     private func refreshDefaultHandlers() {
-        defaultHTTPHandlerID = model.defaultHandlerID(for: "http")
-        defaultHTTPSHandlerID = model.defaultHandlerID(for: "https")
+        defaultHTTPHandlerURL = model.defaultHandlerURL(for: "http")
+        defaultHTTPSHandlerURL = model.defaultHandlerURL(for: "https")
     }
 
     private func binding(for rule: RouteRule) -> Binding<RouteRule> {
