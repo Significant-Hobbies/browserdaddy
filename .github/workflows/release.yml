@@ -134,6 +134,8 @@ jobs:
           python3 .daddy-tooling/tooling/daddy-macos/universal_products.py \
             --app browserdaddy --repository "$CALLER_REPOSITORY" --root app \
             --output app/.build/daddy-universal/Products/Release
+          python3 app/scripts/ui_resources.py --universal-root app \
+            --destination app/.build/daddy-universal/Products/Release
       - name: Assemble Developer ID signed candidate
         env:
           SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_IDENTITY }}

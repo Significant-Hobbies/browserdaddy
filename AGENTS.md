@@ -31,5 +31,8 @@ boundaries:
   roots — never the parent dir or implicit home paths.
 - Use XcodeBuildMCP for build, test, run, logging, and native UI verification.
 - Run focused tests before the full package suite.
-- Do not commit, push, sign, package, publish, or release without explicit
-  owner approval.
+- Follow the shared global autonomy policy: finish work within the owner's
+  requested scope, including local builds, tests, signing, packaging,
+  installation, verification, commits and pushes, without extra approvals.
+- Ask only before a public release. Existing user-facing product consent,
+  reviewed actions and recovery requirements still apply.

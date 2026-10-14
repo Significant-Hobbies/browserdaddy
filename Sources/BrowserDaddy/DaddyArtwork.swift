@@ -19,12 +19,28 @@ struct DaddyArtwork: View {
     }
 }
 
+private class DaddyResourceAnchor {}
+
 enum DaddyResources {
-    static func url(forResource name: String) -> URL? {
-        let packaged = Bundle.main.resourceURL.flatMap {
-            Bundle(url: $0.appendingPathComponent("BrowserDaddy_BrowserDaddy.bundle"))
+    static func url(forResource nameForArtwork: String) -> URL? {
+        let name = "BrowserDaddy_BrowserDaddy.bundle"
+        var locations = [
+            Bundle.main.resourceURL?.appendingPathComponent(name),
+            Bundle(for: DaddyResourceAnchor.self).resourceURL?.appendingPathComponent(name),
+            Bundle.main.bundleURL.appendingPathComponent(name),
+            URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent(name)
+        ]
+        // Native SwiftPM runs XCTest from a host outside the products folder.
+        // Loaded test/framework bundles still identify their sibling resources.
+        locations += ([Bundle(for: DaddyResourceAnchor.self)] + Bundle.allBundles + Bundle.allFrameworks)
+            .map { $0.bundleURL.deletingLastPathComponent().appendingPathComponent(name) }
+        #if DEBUG
+        if let path = ProcessInfo.processInfo.environment["PACKAGE_RESOURCE_BUNDLE_PATH"]
+            ?? ProcessInfo.processInfo.environment["PACKAGE_RESOURCE_BUNDLE_URL"] {
+            locations.insert(URL(fileURLWithPath: path).appendingPathComponent(name), at: 0)
         }
-        return packaged?.url(forResource: name, withExtension: "png")
-            ?? Bundle.module.url(forResource: name, withExtension: "png")
+        #endif
+        return locations.compactMap { $0 }.compactMap { Bundle(url: $0) }
+            .compactMap { $0.url(forResource: nameForArtwork, withExtension: "png") }.first
     }
 }

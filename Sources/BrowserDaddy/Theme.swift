@@ -284,3 +284,16 @@ struct ShareBar: View {
         }
     }
 }
+
+extension View {
+    /// Use packaged fonts when available; missing optional fonts must not trap.
+    func browserTheme(_ palette: SMPalette) -> some View {
+        _ = BrowserUIResources.loaded
+        return environment(\.smPalette, palette)
+            .tint(palette.brand)
+            .foregroundStyle(palette.foreground)
+            .font(.custom(palette.sansFont, size: 16, relativeTo: .body))
+            .background(palette.background.ignoresSafeArea())
+            .preferredColorScheme(palette.isDark ? .dark : .light)
+    }
+}
