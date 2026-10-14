@@ -1,7 +1,6 @@
 import Foundation
 import BrowserCore
 import AppKit
-import CoreServices
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -539,20 +538,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Current https handler — "com.significanthobbies.browserdaddy.dev"
-    /// when we're default.
-    var currentDefaultHandlerID: String {
-        guard let probe = URL(string: "https://browserdaddy.invalid"),
+    func defaultHandlerID(for scheme: String) -> String {
+        guard let probe = URL(string: "\(scheme)://browserdaddy.invalid"),
               let appURL = NSWorkspace.shared.urlForApplication(toOpen: probe)
         else { return "" }
         return Bundle(url: appURL)?.bundleIdentifier ?? ""
     }
 
-    func makeDefaultBrowser() {
-        guard let bid = Bundle.main.bundleIdentifier else { return }
-        LSSetDefaultHandlerForURLScheme("http" as CFString, bid as CFString)
-        LSSetDefaultHandlerForURLScheme("https" as CFString, bid as CFString)
-        objectWillChange.send()
+    func makeDefaultBrowser() async throws {
+        try await DefaultBrowserRegistration.register(
+            bundleID: Bundle.main.bundleIdentifier,
+            setDefault: { scheme in
+                try await NSWorkspace.shared.setDefaultApplication(
+                    at: Bundle.main.bundleURL, toOpenURLsWithScheme: scheme)
+            },
+            handlerID: { [self] scheme in defaultHandlerID(for: scheme) })
     }
 
     func connectBrowser(_ kind: BrowserKind) {
