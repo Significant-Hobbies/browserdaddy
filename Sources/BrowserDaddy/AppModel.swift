@@ -538,21 +538,23 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func defaultHandlerID(for scheme: String) -> String {
+    func defaultHandlerURL(for scheme: String) -> URL? {
         guard let probe = URL(string: "\(scheme)://browserdaddy.invalid"),
               let appURL = NSWorkspace.shared.urlForApplication(toOpen: probe)
-        else { return "" }
-        return Bundle(url: appURL)?.bundleIdentifier ?? ""
+        else { return nil }
+        return appURL
     }
 
     func makeDefaultBrowser() async throws {
         try await DefaultBrowserRegistration.register(
             bundleID: Bundle.main.bundleIdentifier,
+            applicationURL: Bundle.main.bundleURL,
             setDefault: { scheme in
                 try await NSWorkspace.shared.setDefaultApplication(
                     at: Bundle.main.bundleURL, toOpenURLsWithScheme: scheme)
             },
-            handlerID: { [self] scheme in defaultHandlerID(for: scheme) })
+            handlerID: { Bundle(url: $0)?.bundleIdentifier ?? "" },
+            handlerURL: { [self] scheme in defaultHandlerURL(for: scheme) })
     }
 
     func connectBrowser(_ kind: BrowserKind) {
