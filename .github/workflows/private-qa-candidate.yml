@@ -1,0 +1,171 @@
+name: Private notarized QA candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Candidate marketing version
+        required: true
+        default: 0.4.8
+        type: string
+      build:
+        description: Candidate build number
+        required: true
+        default: '20'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: browserdaddy-private-qa
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: github.ref == 'refs/heads/main'
+    environment: production-release
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - name: Check out exact candidate source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: app
+          persist-credentials: false
+      - name: Check out pinned public validation tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: sass-maker/saas-maker
+          ref: 7a3b78acbcd523bb968ff19e1b3ae9427d022b91
+          path: .daddy-tooling
+          persist-credentials: false
+      - name: Validate version, build and exact source
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$BUILD" =~ ^[1-9][0-9]*$ ]]
+          test "$(git -C app rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Run candidate checks
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 .daddy-tooling/tooling/daddy-macos/candidate.py \
+            --app browserdaddy --repository "$CALLER_REPOSITORY" --root app \
+            --receipt "$RUNNER_TEMP/candidate-receipt.json"
+      - name: Require protected signing and notarization inputs
+        env:
+          CERT_READY: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 != '' && secrets.DEVELOPER_ID_CERT_PASSWORD != '' && secrets.DEVELOPER_ID_IDENTITY != '' }}
+          NOTARY_READY: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 != '' && secrets.APPLE_NOTARY_KEY_ID != '' && secrets.APPLE_NOTARY_ISSUER_ID != '' }}
+        run: |
+          if [[ "$CERT_READY" != true || "$NOTARY_READY" != true ]]; then
+            echo 'Protected signing or notary inputs are not configured' >&2
+            exit 1
+          fi
+      - name: Import protected signing inputs
+        env:
+          CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          NOTARY_P8: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+          temp = Path(os.environ['RUNNER_TEMP'])
+          (temp / 'signing.p12').write_bytes(base64.b64decode(os.environ['CERT_P12'], validate=True))
+          key = temp / 'notary.p8'
+          key.write_bytes(base64.b64decode(os.environ['NOTARY_P8'], validate=True))
+          key.chmod(0o600)
+          PY
+          keychain="$RUNNER_TEMP/daddy-qa.keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+      - name: Build verified universal Release products
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 .daddy-tooling/tooling/daddy-macos/universal_products.py \
+            --app browserdaddy --repository "$CALLER_REPOSITORY" --root app \
+            --output app/.build/daddy-universal/Products/Release
+      - name: Assemble Developer ID signed candidate
+        env:
+          SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_IDENTITY }}
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
+        run: |
+          python3 app/scripts/package-release.py \
+            --products app/.build/daddy-universal/Products/Release \
+            --output "$RUNNER_TEMP/release" --identity "$SIGNING_IDENTITY" \
+            --version "$VERSION" --build "$BUILD"
+      - name: Smoke test assembled app launch
+        run: python3 .daddy-tooling/tooling/daddy-macos/launch_smoke.py "$RUNNER_TEMP/release/image-contents/BrowserDaddy.app"
+      - name: Notarize, staple and verify candidate
+        env:
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
+        run: |
+          set -euo pipefail
+          dmg="$RUNNER_TEMP/release/BrowserDaddy-$VERSION-$BUILD-universal.dmg"
+          xcrun notarytool submit "$dmg" --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --wait --output-format json > "$RUNNER_TEMP/release/notarization.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release/notarization.json').read_text())
+          if result.get('status') != 'Accepted' or not result.get('id'):
+              raise SystemExit('Apple did not accept the candidate')
+          PY
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature "$dmg"
+          codesign --verify --deep --strict "$RUNNER_TEMP/release/image-contents/BrowserDaddy.app"
+          cd "$RUNNER_TEMP/release"
+          shasum -a 256 "BrowserDaddy-$VERSION-$BUILD-universal.dmg" > SHA256SUMS
+      - name: Keep QA candidate in a private draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
+        run: |
+          set -euo pipefail
+          tag="qa-browserdaddy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          dmg="$RUNNER_TEMP/release/BrowserDaddy-$VERSION-$BUILD-universal.dmg"
+          gh release create "$tag" --draft --target "$GITHUB_SHA" \
+            --title "Private BrowserDaddy QA $VERSION ($BUILD)" \
+            --notes "Private notarized candidate for issue #25. Do not publish this draft or use it as the update feed. Source: $GITHUB_SHA."
+          draft_url="$(gh release view "$tag" --json url --jq .url)"
+          status="$(curl -sS -o /dev/null -w '%{http_code}' "$draft_url")"
+          if [[ "$status" != 404 ]]; then
+            gh release delete "$tag" --yes
+            echo "Draft visibility check failed: HTTP $status" >&2
+            exit 1
+          fi
+          gh release upload "$tag" "$dmg" "$RUNNER_TEMP/release/SHA256SUMS"
+          asset_url="$(gh release view "$tag" --json assets --jq '.assets[] | select(.name | endswith(".dmg")) | .url')"
+          test -n "$asset_url"
+          status="$(curl -sS -o /dev/null -w '%{http_code}' "$asset_url")"
+          if [[ "$status" != 404 ]]; then
+            gh release delete "$tag" --yes
+            echo "Draft asset visibility check failed: HTTP $status" >&2
+            exit 1
+          fi
+          echo "Private draft: $draft_url" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/release/SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
