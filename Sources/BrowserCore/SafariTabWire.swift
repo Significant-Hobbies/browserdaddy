@@ -3,7 +3,8 @@ import Foundation
 /// A short-lived, local-only response shared by the app and its Safari app
 /// extension. The extension filters private pages before constructing this.
 public enum SafariTabWire {
-    public static let groupID = "group.com.significanthobbies.browserdaddy"
+    /// Team-prefixed macOS group works with Developer ID without provisioning profiles.
+    public static let groupID = "8F7LXHTJZR.com.significanthobbies.browserdaddy"
     public static func extensionID(hostBundleID: String) -> String {
         hostBundleID + ".safaritabs"
     }

@@ -3,5 +3,5 @@
 <plist version="1.0"><dict>
     <key>com.apple.security.app-sandbox</key><true/>
     <key>com.apple.security.application-groups</key>
-    <array><string>group.com.significanthobbies.browserdaddy</string></array>
+    <array><string>8F7LXHTJZR.com.significanthobbies.browserdaddy</string></array>
 </dict></plist>
