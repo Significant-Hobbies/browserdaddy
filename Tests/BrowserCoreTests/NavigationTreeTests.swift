@@ -76,4 +76,96 @@ final class NavigationTreeTests: XCTestCase {
         XCTAssertNil(try store.navigationTree(
             browser: "chrome", profile: "Work", visitID: 41))
     }
+
+    func testExactDescendantLimitIsCompleteButNextVisitIsTruncated() throws {
+        let children = (2...252).map { visit(Int64($0), parent: 1) }
+        try store.merge(visits: [visit(1)] + children, source: source)
+
+        let overLimit = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 1))
+        XCTAssertEqual(overLimit.nodes.count, 251)
+        XCTAssertTrue(overLimit.truncated)
+
+        try store.db.execute("DELETE FROM visits WHERE visit_id = 252")
+        let exactLimit = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 1))
+        XCTAssertEqual(exactLimit.nodes.count, 251)
+        XCTAssertFalse(exactLimit.truncated)
+    }
+
+    func testDepthLimitDisclosesOnlyARealOmittedChild() throws {
+        let chain = (1...34).map { id in
+            visit(Int64(id), parent: id == 1 ? nil : Int64(id - 1))
+        }
+        try store.merge(visits: chain, source: source)
+
+        let tooDeep = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 1))
+        XCTAssertEqual(tooDeep.nodes.map(\.visitID), Array(Int64(1)...Int64(33)))
+        XCTAssertTrue(tooDeep.truncated)
+
+        try store.db.execute("DELETE FROM visits WHERE visit_id = 34")
+        let exactDepth = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 1))
+        XCTAssertEqual(exactDepth.nodes.count, 33)
+        XCTAssertFalse(exactDepth.truncated)
+    }
+
+    func testAncestorLimitStopsBeforeSixtyFifthVisit() throws {
+        let chain = (1...65).map { id in
+            visit(Int64(id), parent: id == 1 ? nil : Int64(id - 1))
+        }
+        try store.merge(visits: chain, source: source)
+
+        let tooLong = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 65))
+        XCTAssertEqual(tooLong.nodes.first?.visitID, 2)
+        XCTAssertEqual(tooLong.nodes.count, 64)
+        XCTAssertTrue(tooLong.truncated)
+
+        let exactLimit = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 64))
+        XCTAssertEqual(exactLimit.nodes.first?.visitID, 1)
+        XCTAssertEqual(exactLimit.nodes.count, 65) // visit 65 is a downstream child
+        XCTAssertFalse(exactLimit.truncated)
+    }
+
+    func testZeroAndMalformedIdentifiersCannotCreateLinks() throws {
+        try store.merge(visits: [visit(0), visit(1, parent: 0),
+                                 visit(2, parent: 1)], source: source)
+        try store.db.execute("""
+            INSERT INTO visits (browser, profile, visit_id, from_visit, url, title)
+            VALUES ('chrome', 'Work', 'bad-id', 1, 'https://example.test/bad', 'Bad')
+        """)
+        try store.db.execute("""
+            INSERT INTO visits (browser, profile, visit_id, from_visit, url, title)
+            VALUES ('chrome', 'Work', 3, 'bad-parent', 'https://example.test/3', 'Three')
+        """)
+
+        XCTAssertNil(try store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 0))
+        let root = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 1))
+        XCTAssertEqual(root.nodes.map(\.visitID), [1, 2])
+        XCTAssertNil(root.nodes.first?.parentID)
+
+        let orphan = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 3))
+        XCTAssertEqual(orphan.nodes.map(\.visitID), [3])
+        XCTAssertNil(orphan.nodes.first?.parentID)
+    }
+
+    func testDeletedIntermediateVisitDoesNotInventAConnection() throws {
+        try store.merge(visits: [visit(1), visit(2, parent: 1),
+                                 visit(3, parent: 2)], source: source)
+        try store.db.execute("DELETE FROM visits WHERE visit_id = 2")
+
+        let child = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 3))
+        XCTAssertEqual(child.nodes.map(\.visitID), [3])
+        XCTAssertEqual(child.missingParentID, 2)
+        let root = try XCTUnwrap(store.navigationTree(
+            browser: "chrome", profile: "Work", visitID: 1))
+        XCTAssertEqual(root.nodes.map(\.visitID), [1])
+    }
 }
