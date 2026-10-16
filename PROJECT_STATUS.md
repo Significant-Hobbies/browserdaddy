@@ -421,8 +421,8 @@ Tracking: issue #1.
 
 - Free-tier classifier quota throttles bulk re-runs; incremental is fine
 - ~1.2k long-tail domains still <0.5 confidence — swept on next tag run
-- from_visit chains stored but unexploited (navigation trees = next
-  feature)
+- History now exposes bounded navigation journeys from recorded `from_visit`
+  links; Safari has no source parent links, so its journeys are single visits
 - Dashboard is long; could split into sub-pages if it grows further
 - Python launchd agents can be retired once app grants are confirmed:
   `launchctl bootout gui/$UID/com.browserdaddy.{watch,extract}`

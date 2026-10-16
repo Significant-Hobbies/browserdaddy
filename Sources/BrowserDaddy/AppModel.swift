@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published var browserAccessError = ""
     struct HistoryRow: Identifiable {
         let id: String
+        let visitID: Int64
         let time: Date?
         let browser, profile, title, url, host: String
         let category, tagSource, tagScope: String?
@@ -904,6 +905,7 @@ final class AppModel: ObservableObject {
         historyRows = rows.map {
             HistoryRow(
                 id: "\($0.browser)/\($0.profile)/\($0.visitID)",
+                visitID: $0.visitID,
                 time: $0.visitedAt, browser: $0.browser, profile: $0.profile,
                 title: $0.title, url: $0.url, host: $0.host,
                 category: $0.category, tagSource: $0.tagSource, tagScope: $0.tagScope,

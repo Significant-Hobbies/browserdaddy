@@ -75,6 +75,7 @@ final class AppStartup: ObservableObject {
                                        startCollection: {}, previewFixture: true)
                 fixture.tabGroups = PreviewArchive.tabGroups
                 model = fixture
+                Task { await fixture.reload() }
             } else {
                 model = AppModel(store: try openArchive())
             }
@@ -122,10 +123,11 @@ private enum PreviewArchive {
         let safari = HistorySource(browser: "safari", profile: "Personal",
                                    path: url, engine: .safari)
         try store.merge(visits: [
-            visit(1, "https://developer.apple.com/documentation/swiftui", "SwiftUI documentation", now),
-            visit(2, "https://github.com/example/project/pulls", "Pull requests · example/project", now.addingTimeInterval(-840)),
-            visit(3, "https://news.ycombinator.com/", "Hacker News", now.addingTimeInterval(-2_400)),
+            visit(1, "https://developer.apple.com/documentation/swiftui", "SwiftUI documentation", now, parent: 2),
+            visit(2, "https://github.com/example/project/pulls", "Pull requests · example/project", now.addingTimeInterval(-840), parent: 3),
+            visit(3, "https://news.ycombinator.com/", "Hacker News", now.addingTimeInterval(-2_400), parent: 4),
             visit(4, "https://docs.example.dev/performance", "Performance guide", now.addingTimeInterval(-8_400)),
+            visit(5, "https://github.com/example/project/issues", "Issues · example/project", now.addingTimeInterval(-300), parent: 2),
         ], source: chrome)
         try store.merge(visits: [
             visit(10, "https://www.youtube.com/watch", "Design systems talk", now.addingTimeInterval(-1_500)),
@@ -142,10 +144,10 @@ private enum PreviewArchive {
     }
 
     private static func visit(_ id: Int64, _ url: String, _ title: String,
-                              _ date: Date) -> HistoryVisit {
+                              _ date: Date, parent: Int64? = nil) -> HistoryVisit {
         HistoryVisit(browser: "", profile: "", visitID: id, url: url, title: title,
                      visitedAt: date, visitCount: 1, typedCount: 0,
-                     transition: "link", fromVisit: nil)
+                     transition: "link", fromVisit: parent)
     }
 }
 

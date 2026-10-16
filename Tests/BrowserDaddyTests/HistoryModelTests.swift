@@ -21,7 +21,7 @@ final class HistoryModelTests: XCTestCase {
         let model = AppModel(store: store, startCollection: {})
         XCTAssertFalse(model.classifyOptin)
         let row = AppModel.HistoryRow(
-            id: "chrome/Work/1", time: Date(), browser: "chrome", profile: "Work",
+            id: "chrome/Work/1", visitID: 1, time: Date(), browser: "chrome", profile: "Work",
             title: "Guide", url: url, host: "docs.example.com",
             category: nil, tagSource: nil, tagScope: nil,
             pageCategory: nil, pageTagSource: nil,
