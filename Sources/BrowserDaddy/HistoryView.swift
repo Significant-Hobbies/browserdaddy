@@ -7,6 +7,7 @@ struct HistoryView: View {
     @EnvironmentObject private var model: AppModel
     @State private var expandedRow: String?
     @State private var tagTarget: AppModel.HistoryRow?
+    @State private var journeyTarget: AppModel.HistoryRow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -16,6 +17,9 @@ struct HistoryView: View {
         }
         .sheet(item: $tagTarget) { row in
             HistoryTagSheet(row: row).environmentObject(model)
+        }
+        .sheet(item: $journeyTarget) { row in
+            NavigationTreeSheet(row: row).environmentObject(model)
         }
     }
 
@@ -191,8 +195,13 @@ struct HistoryView: View {
             detailLine("Page tag", scopedTag(row.pageCategory, row.pageTagSource))
             detailLine("Domain", scopedTag(row.domainCategory, row.domainTagSource))
             HStack(spacing: 8) {
+                Button { journeyTarget = row } label: {
+                    Label("Journey", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                        .textCase(.lowercase)
+                }
+                .buttonStyle(DaddyButtonStyle(prominent: true))
                 Button { tagTarget = row } label: { Label("Retag", systemImage: "tag").textCase(.lowercase) }
-                    .buttonStyle(DaddyButtonStyle(prominent: true))
+                    .buttonStyle(DaddyButtonStyle())
                 Button { copy(row.url) } label: { Label("Copy URL", systemImage: "doc.on.doc").textCase(.lowercase) }
                     .buttonStyle(DaddyButtonStyle())
                 Button { open(row.url) } label: { Label("Open", systemImage: "arrow.up.right.square").textCase(.lowercase) }
@@ -219,6 +228,7 @@ struct HistoryView: View {
     @ViewBuilder private func rowActions(_ row: AppModel.HistoryRow) -> some View {
         Button("Expand details") { expandedRow = row.id }.textCase(.lowercase)
         Button("Retag…") { tagTarget = row }.textCase(.lowercase)
+        Button("Show navigation journey") { journeyTarget = row }.textCase(.lowercase)
         Divider()
         Button("Copy URL") { copy(row.url) }.textCase(.lowercase)
         Button("Open URL") { open(row.url) }.textCase(.lowercase)
@@ -269,6 +279,124 @@ struct HistoryView: View {
 
     private func open(_ value: String) {
         if let url = URL(string: value) { NSWorkspace.shared.open(url) }
+    }
+}
+
+private struct NavigationTreeSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let row: AppModel.HistoryRow
+    @State private var tree: NavigationTree?
+    @State private var loading = true
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                DaddyArtwork(brand: true).frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 4) {
+                    SMSectionHeader("Navigation journey", size: 22)
+                    Text("\(row.source) · earlier path → this page → later branches")
+                        .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.buttonStyle(DaddyButtonStyle())
+            }
+            .padding(22)
+            Divider().overlay(BrowserTheme.mintInk.opacity(0.18))
+            if loading {
+                ProgressView("Reconstructing saved links…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error {
+                ContentUnavailableView(error, systemImage: "link.badge.plus")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let tree {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if tree.nodes.count == 1 {
+                            note("No linked visits are archived for this page.")
+                        } else {
+                            note("Recorded links only. Visits from other browser profiles and private windows are never inferred.")
+                        }
+                        if let missing = tree.missingParentID {
+                            note("Earlier visit #\(missing) is absent from this archive; the path starts at the first saved page.")
+                        }
+                        if tree.cycleDetected {
+                            note("The recorded links contain a cycle. The repeated link is omitted.")
+                        }
+                        if tree.truncated {
+                            note("This view is bounded to 64 earlier visits, 250 downstream visits, and 32 downstream steps.")
+                        }
+                        ForEach(tree.nodes) { node in
+                            nodeRow(node)
+                        }
+                    }
+                    .padding(22)
+                }
+            }
+        }
+        .frame(minWidth: 640, minHeight: 480)
+        .background(Color.black)
+        .task(id: row.id) {
+            loading = true
+            error = nil
+            let store = model.store
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try store.navigationTree(browser: row.browser,
+                                             profile: row.profile,
+                                             visitID: row.visitID)
+                }.value
+                tree = result
+                if result == nil { error = "This visit is no longer in the archive." }
+            } catch {
+                self.error = "The saved links could not be read."
+            }
+            loading = false
+        }
+    }
+
+    private func note(_ message: String) -> some View {
+        Text(message)
+            .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.bottom, 12)
+    }
+
+    private func nodeRow(_ node: NavigationTree.Node) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: node.isSelected ? "circle.inset.filled" : "circle")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(node.isSelected ? BrowserTheme.mintInk : BrowserTheme.cyan)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(node.title.isEmpty ? node.url : node.title)
+                        .font(.callout.weight(node.isSelected ? .semibold : .regular))
+                        .foregroundStyle(BrowserTheme.ink)
+                        .lineLimit(2)
+                    if node.isSelected {
+                        SMStatusPill("selected", tone: .brand)
+                    }
+                }
+                Text(node.url).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                    .lineLimit(1).truncationMode(.middle)
+                Text(node.visitedAt?.formatted(date: .abbreviated, time: .shortened)
+                     ?? "Time unavailable")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(BrowserTheme.secondaryInk)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, CGFloat(min(node.depth, 8)) * 20)
+        .padding(.vertical, 9)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(node.isSelected ? BrowserTheme.mintInk.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7))
+        .overlay(alignment: .bottom) { Divider().overlay(BrowserTheme.divider) }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Level \(node.depth + 1), \(node.isSelected ? "selected, " : "")\(node.title.isEmpty ? node.url : node.title)")
     }
 }
 

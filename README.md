@@ -87,6 +87,12 @@ or clear a page, exact-domain or whole-site override. Local retagging never call
 classifier.dev and never modifies the browser's own history. Optional external
 classification remains a separate consent-gated action in Permissions.
 
+Use **Journey** on an archived visit to see its recorded path back and the
+branches that followed it in the same browser profile. The view does not infer
+missing links or private visits. It reports missing parents and cycles, and
+bounds unusually large journeys to 64 earlier visits, 250 downstream visits,
+and 32 downstream steps. Safari visits have no recorded parent links.
+
 The current consent discloses domain names, truncated page titles and URL paths.
 These requests are not anonymous: text can contain personal information and the
 service receives the network address. URL credentials, query strings and fragments

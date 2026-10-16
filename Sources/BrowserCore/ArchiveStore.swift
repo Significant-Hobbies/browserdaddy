@@ -28,6 +28,10 @@ public final class ArchiveStore: @unchecked Sendable {
         try db.execute("CREATE INDEX IF NOT EXISTS idx_visits_time ON visits(visit_time_utc)")
         try db.execute("CREATE INDEX IF NOT EXISTS idx_visits_url ON visits(url)")
         try db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_visits_parent
+                ON visits(browser, profile, from_visit)
+        """)
+        try db.execute("""
             CREATE TABLE IF NOT EXISTS searches (
                 browser TEXT, profile TEXT, term TEXT, url TEXT, title TEXT)
         """)
