@@ -28,6 +28,15 @@ final class NavigationTreeTests: XCTestCase {
                      fromVisit: parent)
     }
 
+    private func chain(through last: Int64) -> [HistoryVisit] {
+        var visits: [HistoryVisit] = []
+        for id in 1...last {
+            let parent: Int64? = id == 1 ? nil : id - 1
+            visits.append(visit(id, parent: parent))
+        }
+        return visits
+    }
+
     func testBranchingShowsAncestorsAndSelectedDescendantsInOrder() throws {
         try store.merge(visits: [visit(1), visit(2, parent: 1),
                                  visit(3, parent: 2), visit(4, parent: 2),
@@ -94,10 +103,7 @@ final class NavigationTreeTests: XCTestCase {
     }
 
     func testDepthLimitDisclosesOnlyARealOmittedChild() throws {
-        let chain = (1...34).map { id in
-            visit(Int64(id), parent: id == 1 ? nil : Int64(id - 1))
-        }
-        try store.merge(visits: chain, source: source)
+        try store.merge(visits: chain(through: 34), source: source)
 
         let tooDeep = try XCTUnwrap(store.navigationTree(
             browser: "chrome", profile: "Work", visitID: 1))
@@ -112,10 +118,7 @@ final class NavigationTreeTests: XCTestCase {
     }
 
     func testAncestorLimitStopsBeforeSixtyFifthVisit() throws {
-        let chain = (1...65).map { id in
-            visit(Int64(id), parent: id == 1 ? nil : Int64(id - 1))
-        }
-        try store.merge(visits: chain, source: source)
+        try store.merge(visits: chain(through: 65), source: source)
 
         let tooLong = try XCTUnwrap(store.navigationTree(
             browser: "chrome", profile: "Work", visitID: 65))
