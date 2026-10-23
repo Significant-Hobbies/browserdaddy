@@ -14,33 +14,23 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         XCTAssertTrue(["normal", "private", "recovery"].contains(mode))
         guard ["normal", "private", "recovery"].contains(mode) else { return }
         let canary = "https://example.com/?browserdaddy-qualification=20261023"
-        guard Permissions.automationState(bundleID: BrowserKind.chrome.bundleIdentifier,
-                                          scriptName: "Google Chrome") == .granted else {
+        let chrome = try BrowserProcess.application(bundleID: BrowserKind.chrome.bundleIdentifier)
+        let reader: ChromiumCapture
+        do { reader = try ChromiumCapture(application: chrome) }
+        catch ChromiumCapture.Failure.needsConsent {
             throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested")
         }
-        let chrome = try XCTUnwrap(NSRunningApplication.runningApplications(
-            withBundleIdentifier: BrowserKind.chrome.bundleIdentifier).first)
-        // Qualify the browser capture kernels without claiming that the Mac
-        // foreground poller, idle or sleep transitions were exercised.
-        // Check the real window type without reading its private URL or title.
-        let windowMode = try execute("""
-            tell application id "com.google.Chrome"
-                if (count of windows) is 0 then return "no-window"
-                set candidate to front window
-                if (mode of candidate) is "normal" then return "normal"
-                if (mode of candidate) is "incognito" then return "incognito"
-                return "unknown"
-            end tell
-            """)
+        // Use the same selected GUI process at every capture boundary. Checking
+        // window mode never asks for its URL or title.
+        let windowMode = try reader.frontWindowMode() ?? "no-window"
         let expectedWindow = mode == "private" ? "incognito" : "normal"
         guard windowMode == expectedWindow else {
             XCTFail("Canary window type mismatch: \(windowMode); no URL or title read")
             return
         }
-        let captured = FocusWatcher.decodeTab(try execute(try XCTUnwrap(
-            FocusWatcher.tabScript(bundleID: BrowserKind.chrome.bundleIdentifier))))
+        let captured = FocusWatcher.browserTab(chrome)
         let routed = FrontmostTab.capture(frontmost: chrome)
-        guard case let .tabs(tabs) = TabInventory.state(for: .chrome) else {
+        guard case let .tabs(tabs) = TabInventory.state(for: .chrome, application: chrome) else {
             XCTFail("Actual tab inventory did not complete; an empty/error response is not privacy proof")
             return
         }
@@ -63,20 +53,6 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             }
             XCTAssertEqual(tabs.filter { $0.url == canary }.count, 1)
         }
-    }
-
-    private func execute(_ source: String) throws -> String {
-        var error: NSDictionary?
-        guard let script = NSAppleScript(source: source) else {
-            throw NSError(domain: "BrowserDaddyPrivacyQualification", code: 2)
-        }
-        let result = script.executeAndReturnError(&error)
-        guard error == nil else {
-            // Never dump Apple events, titles or URLs into test logs.
-            throw NSError(domain: "BrowserDaddyPrivacyQualification", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Native browser capture failed"])
-        }
-        return result.stringValue ?? ""
     }
 
     private func verifyNoCarryForward(capture: (String, String), canary: String) throws {
