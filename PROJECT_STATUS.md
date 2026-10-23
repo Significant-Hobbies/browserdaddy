@@ -1,5 +1,21 @@
 # BrowserDaddy — project status
 
+## 2026-10-23 — repeatable native privacy qualification; caveat remains
+
+An opt-in real-Chrome canary test now exercises the production focus, routing
+and tab-inventory capture paths, including private capture applied to a
+temporary focus archive. The procedure lives beside the test in
+`Tests/BrowserCoreTests/PRIVACY-QUALIFICATION.md`. It requests no new permission
+and logs no tab URLs or titles. Ordinary CI skips real-browser access.
+
+The full suite passes with 88 XCTest passes, one intentional runtime skip and
+two Swift Testing passes. Live normal-stage attempts failed their canary/setup
+assertions; the cause remains unqualified; private/recovery were not run, so no runtime privacy pass is
+claimed. A controlled idle-window session and the exact installed-package
+browser-switch/idle/sleep/relaunch matrix remain required. Capture-kernel
+checks do not establish released sandbox or Automation identity equivalence.
+
+
 ## 2026-09-27 — 0.4.7 build 16: windowless routing, invisible after setup
 
 Protected release run 36319870382 signed, notarized, stapled, launched,
