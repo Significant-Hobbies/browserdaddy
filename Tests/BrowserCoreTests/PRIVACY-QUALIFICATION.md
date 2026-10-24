@@ -5,12 +5,18 @@ access. A skipped, failed or setup-blocked attempt is never a privacy pass.
 No test requests Automation access, opens the owner archive, imports history,
 changes browser settings, invokes classification, or prints tab URLs/titles.
 
-Use a dedicated Chrome window with this disposable page:
-`https://example.com/?browserdaddy-qualification=20261023`.
-Keep it open during the private stage. Run these stages separately:
+Normal mode creates one controlled Chrome window with this inert canary URL:
+`about:blank#browserdaddy-qualification-20261024`.
+It records the new window ID, requires the native foreground process and top
+on-screen ordinary window to be Chrome, verifies that the controlled window is
+the Chrome front window and has exactly one tab, and closes only that created
+window afterward. It does not enumerate unrelated normal tabs. Run stages
+separately:
 
 1. Normal window: `BROWSERDADDY_PRIVACY_MODE=normal swift test --filter PrivateWindowRuntimeTests`.
-2. Open one Incognito window through browser UI with the same canary page.
+2. For private qualification, open a separate normal Chrome window with the
+   same inert canary URL and keep it open. Then open one Incognito window
+   through browser UI with the same canary URL.
    Run with `BROWSERDADDY_PRIVACY_MODE=private`.
 3. Close only the test Incognito window through UI, return to the normal
    canary, then run with `BROWSERDADDY_PRIVACY_MODE=recovery`.

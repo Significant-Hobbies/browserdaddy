@@ -1,9 +1,11 @@
 import AppKit
+import CoreGraphics
 import XCTest
 @testable import BrowserCore
 
 /// Opt-in, real-browser qualification. Ordinary CI never reads open tabs.
-/// The operator supplies a dedicated normal/private canary window through UI.
+/// Normal mode creates and later closes one controlled canary window. Private
+/// and recovery modes retain the operator-supplied window flow.
 @MainActor
 final class PrivateWindowRuntimeTests: XCTestCase {
     func testChromeWindowPrivacyAtTheActualCaptureBoundaries() throws {
@@ -13,7 +15,12 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
         XCTAssertTrue(["normal", "private", "recovery"].contains(mode))
         guard ["normal", "private", "recovery"].contains(mode) else { return }
-        let canary = "https://example.com/?browserdaddy-qualification=20261023"
+        let canary = "about:blank#browserdaddy-qualification-20261024"
+        if mode == "normal" {
+            try runControlledNormalCanary(url: canary)
+            return
+        }
+
         let chrome = try BrowserProcess.application(bundleID: BrowserKind.chrome.bundleIdentifier)
         let reader: ChromiumCapture
         do { reader = try ChromiumCapture(application: chrome) }
@@ -43,17 +50,167 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             // one copy proves inventory works while excluding its private twin.
             XCTAssertEqual(tabs.filter { $0.url == canary }.count, 1)
             try verifyNoCarryForward(capture: captured, canary: canary)
-        } else {
-            XCTAssertTrue(captured.0 == canary, "Normal canary mismatch; URLs deliberately omitted")
-            switch routed {
-            case let .url(browser, value):
-                XCTAssertEqual(browser, .chrome)
-                XCTAssertTrue(value == canary, "Routing canary mismatch; URLs deliberately omitted")
-            default: XCTFail("The real normal-window routing capture was unavailable")
-            }
-            XCTAssertEqual(tabs.filter { $0.url == canary }.count, 1)
         }
     }
+
+    private func runControlledNormalCanary(url: String) throws {
+        let chrome = try BrowserProcess.application(bundleID: BrowserKind.chrome.bundleIdentifier)
+        do { _ = try ChromiumCapture(application: chrome) }
+        catch ChromiumCapture.Failure.needsConsent {
+            throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested")
+        }
+        let previousApplication = NSWorkspace.shared.frontmostApplication
+        var previousChromeWindowID: Int?
+        if previousApplication?.processIdentifier == chrome.processIdentifier {
+            guard let id = try? scriptInteger(
+                "tell application id \"com.google.Chrome\" to get id of front window") else {
+                XCTFail("Could not preserve the previously frontmost Chrome window")
+                return
+            }
+            previousChromeWindowID = id
+        }
+
+        // Create a window and retain its ID before setting its only tab to the
+        // disposable URL. This probe never enumerates unrelated tabs.
+        guard let controlledWindowID = try? createNormalWindow(), controlledWindowID > 0 else {
+            XCTFail("Could not create the controlled normal canary window")
+            return
+        }
+        print("BrowserDaddy controlled normal canary created: windowID=\(controlledWindowID)")
+        defer {
+            let closed = (try? closeWindow(controlledWindowID)) ?? false
+            XCTAssertTrue(closed, "Could not close only the controlled canary window")
+            if let previousApplication {
+                if previousApplication.processIdentifier == chrome.processIdentifier,
+                   let previousChromeWindowID {
+                    _ = try? activateChromeWindow(previousChromeWindowID)
+                } else {
+                    _ = previousApplication.activate()
+                }
+            }
+        }
+
+        guard (try? prepareWindow(controlledWindowID, url: url)) == true else {
+            XCTFail("Could not prepare one normal canary tab; values omitted")
+            return
+        }
+
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let selectedPIDMatches = frontmost?.processIdentifier == chrome.processIdentifier
+            && frontmost?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier
+        let topWindowPIDMatches = topmostOrdinaryWindowPID() == chrome.processIdentifier
+        let frontWindowMatches = (try? scriptInteger(
+            "tell application id \"com.google.Chrome\" to get id of front window")) == controlledWindowID
+        guard selectedPIDMatches, topWindowPIDMatches, frontWindowMatches else {
+            XCTFail("Native foreground PID/front-window preflight failed; capture skipped; no tab content read")
+            return
+        }
+
+        do {
+            let capture = try ChromiumCapture(application: chrome)
+            guard try capture.frontWindowMode() == "normal" else {
+                XCTFail("Controlled front window was not confirmed normal; no tab content read")
+                return
+            }
+        } catch {
+            XCTFail("Controlled normal window mode was unavailable; no tab content read")
+            return
+        }
+
+        print("BrowserDaddy controlled normal canary gates: nativePID=true, topWindowPID=true, frontWindow=true, oneTab=true")
+        let captured = FocusWatcher.browserTab(chrome)
+        let routed = FrontmostTab.capture(frontmost: frontmost)
+        XCTAssertTrue(captured.0 == url, "Focused capture did not match the controlled canary; values omitted")
+        switch routed {
+        case let .url(browser, value):
+            XCTAssertTrue(browser == .chrome && value == url,
+                          "Routing capture did not match the controlled canary; values omitted")
+        default:
+            XCTFail("Routing capture was unavailable for the controlled canary; values omitted")
+        }
+    }
+
+    private func createNormalWindow() throws -> Int {
+        try scriptInteger("""
+        tell application id "com.google.Chrome"
+            activate
+            set controlledWindow to make new window with properties {mode:"normal"}
+            return id of controlledWindow as text
+        end tell
+        """)
+    }
+
+    private func prepareWindow(_ id: Int, url: String) throws -> Bool {
+        let result = try runScript("""
+        tell application id "com.google.Chrome"
+            set controlledWindow to window id \(id)
+            set URL of active tab of controlledWindow to "\(url)"
+            set controlledTabCount to count of tabs of controlledWindow
+            set controlledMode to mode of controlledWindow
+            set frontWindowID to id of front window
+            return (controlledTabCount as text) & ":" & controlledMode & ":" & (frontWindowID as text)
+        end tell
+        """)
+        return result == "1:normal:\(id)"
+    }
+
+    private func closeWindow(_ id: Int) throws -> Bool {
+        try runScript("""
+        tell application id "com.google.Chrome"
+            close window id \(id)
+            return "closed"
+        end tell
+        """) == "closed"
+    }
+
+    private func activateChromeWindow(_ id: Int) throws -> Bool {
+        try runScript("""
+        tell application id "com.google.Chrome"
+            activate
+            set index of window id \(id) to 1
+            return (id of front window) as text
+        end tell
+        """) == String(id)
+    }
+
+    private func scriptInteger(_ source: String) throws -> Int {
+        guard let value = try runScript(source).trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":").last,
+              let integer = Int(value) else { throw RuntimeProbeError.script }
+        return integer
+    }
+
+    private func runScript(_ source: String) throws -> String {
+        guard let script = NSAppleScript(source: source) else { throw RuntimeProbeError.script }
+        var error: NSDictionary?
+        let result = script.executeAndReturnError(&error)
+        guard error == nil, let value = result.stringValue else { throw RuntimeProbeError.script }
+        return value
+    }
+
+    /// Reads only window-owner metadata. It deliberately never asks for window
+    /// names, titles, URLs, images, history, or profile data.
+    private func topmostOrdinaryWindowPID() -> pid_t? {
+        guard let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID)
+                as? [[String: Any]] else { return nil }
+        for window in list {
+            guard let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  layer == 0,
+                  let alpha = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? NSNumber)?.doubleValue,
+                  width > 0, height > 0,
+                  let ownerPID = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else {
+                continue
+            }
+            return ownerPID
+        }
+        return nil
+    }
+
+    private enum RuntimeProbeError: Error { case script }
 
     private func verifyNoCarryForward(capture: (String, String), canary: String) throws {
         let directory = FileManager.default.temporaryDirectory
