@@ -4,7 +4,7 @@ import Foundation
 
 /// OS-level focus watcher. Polls the frontmost app every `interval` seconds;
 /// when it's a scriptable browser, reads the active tab URL+title via
-/// AppleScript. Writes compact focus segments into the archive — one row per
+/// PID-addressed Apple events. Writes one compact focus segment per
 /// continuous (app, url) span, with `active_s` counting only ticks where the
 /// machine wasn't idle.
 ///
@@ -28,7 +28,7 @@ public final class FocusWatcher: @unchecked Sendable {
     ]
 
     public static var tabCapableBrowsers: [String: String] {
-        scriptableBrowsers.filter { tabScript(bundleID: $0.key) != nil }
+        scriptableBrowsers.filter { ChromiumCapture.supportedBundleIDs.contains($0.key) }
     }
 
     private let store: ArchiveStore
@@ -83,10 +83,7 @@ public final class FocusWatcher: @unchecked Sendable {
         let app = front.localizedName ?? front.bundleIdentifier ?? "unknown"
         let active = idleSeconds() < Self.idleLimit
 
-        var url = "", title = ""
-        if let bundleID = front.bundleIdentifier {
-            (url, title) = browserTab(bundleID)
-        }
+        let (url, title) = Self.browserTab(front)
         // An unavailable/private tab must close the previous URL immediately;
         // carrying it over would attribute private browsing to a public page.
         recordCapture(app: app, url: url, title: title, dt: dt, active: active)
@@ -152,41 +149,10 @@ public final class FocusWatcher: @unchecked Sendable {
             .combinedSessionState, eventType: anyInput)
     }
 
-    /// Chromium-family dictionaries expose an immutable normal/incognito
-    /// window `mode`; where a browser's dictionary lacks it the script
-    /// errors and the poll records app-only focus — a private URL is never
-    /// carried into the archive.
-    static func tabScript(bundleID: String) -> String? {
-        let chromium: Set<String> = [
-            "com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac",
-            "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
-            "com.operasoftware.Opera", "org.chromium.Chromium",
-        ]
-        guard chromium.contains(bundleID) else { return nil }
-        return """
-            tell application id "\(bundleID)"
-                if (count of windows) is 0 then return ""
-                set captureWindow to front window
-                if (mode of captureWindow) is not "normal" then return ""
-                set captureTab to active tab of captureWindow
-                return (URL of captureTab) & (ASCII character 31) & (title of captureTab)
-            end tell
-            """
-    }
-
-    static func decodeTab(_ value: String?) -> (String, String) {
-        guard let str = value, let sep = str.range(of: "\u{1f}"),
-              !str[..<sep.lowerBound].isEmpty else { return ("", "") }
-        return (String(str[..<sep.lowerBound]), String(str[sep.upperBound...]))
-    }
-
-    /// No tab is queried when privacy status cannot be verified.
-    private func browserTab(_ bundleID: String) -> (String, String) {
-        guard let source = Self.tabScript(bundleID: bundleID) else { return ("", "") }
-        let script = NSAppleScript(source: source)
-        var err: NSDictionary?
-        let result = script?.executeAndReturnError(&err)
-        guard err == nil else { return ("", "") }
-        return Self.decodeTab(result?.stringValue)
+    /// Shared with runtime qualification; privacy or automation failure yields app-only focus.
+    static func browserTab(_ application: NSRunningApplication) -> (String, String) {
+        guard let capture = try? ChromiumCapture(application: application),
+              let tab = try? capture.activeTab() else { return ("", "") }
+        return (tab.url, tab.title)
     }
 }

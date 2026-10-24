@@ -14,15 +14,12 @@ public enum Permissions {
     public static func automationState(
         bundleID: String, scriptName _: String
     ) -> AutomationState {
-        guard let running = NSRunningApplication.runningApplications(
-            withBundleIdentifier: bundleID).first else { return .notRunning }
-        let address = NSAppleEventDescriptor(
-            processIdentifier: running.processIdentifier)
-        let status = withExtendedLifetime(address) {
-            AEDeterminePermissionToAutomateTarget(
-                address.aeDesc, AEEventClass(typeWildCard),
-                AEEventID(typeWildCard), false)
-        }
+        let running: NSRunningApplication
+        do { running = try BrowserProcess.application(bundleID: bundleID) }
+        catch BrowserProcess.Failure.notRunning { return .notRunning }
+        catch { return .unknown }
+        let address = NSAppleEventDescriptor(processIdentifier: running.processIdentifier)
+        let status = ChromiumCapture.permission(address: address, prompt: false)
         switch status {
         case noErr: return .granted
         case OSStatus(errAEEventNotPermitted): return .denied
