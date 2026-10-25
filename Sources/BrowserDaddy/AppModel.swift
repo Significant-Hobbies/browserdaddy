@@ -134,8 +134,7 @@ final class AppModel: ObservableObject {
         refreshPermissions()
         watcher.onTick = { [weak self] app, url in
             Task { @MainActor in
-                self?.nowApp = app
-                self?.nowURL = url
+                self?.updateCurrentFocus(app: app, url: url)
             }
         }
         watcher.onSegment = { [weak self] _, _ in
@@ -168,6 +167,11 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             Task.detached(priority: .utility) { self.alerts.evaluate() }
         }
+    }
+
+    func updateCurrentFocus(app: String, url: String) {
+        if nowApp != app { nowApp = app }
+        if nowURL != url { nowURL = url }
     }
 
     /// Persist alert thresholds; enabling asks macOS for notification consent.
