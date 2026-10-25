@@ -103,18 +103,22 @@ final class ChromiumCaptureTests: XCTestCase {
     }
 
     func testActiveTabMetadataMismatchRefusesBeforeURLOrTitleReads() throws {
-        let fixture = Fixture([ids(["capture-target", "expected-window"]),
+        let expectedWindow = ChromiumCapture.ActiveTabMetadata(
+            windowID: "expected-window", mode: "normal", activeTabID: "canary-tab")
+        let windowMismatch = Fixture([ids(["capture-target", "expected-window"]),
             NSAppleEventDescriptor(string: "normal"), NSAppleEventDescriptor(string: "canary-tab")])
-        let reader = try capture(fixture)
-        let metadata = try XCTUnwrap(reader.activeTabMetadata())
-        let targetMatches = metadata.windowID == "expected-window"
-            && metadata.mode == "normal"
-            && metadata.activeTabID == "canary-tab"
 
-        XCTAssertFalse(targetMatches)
-        XCTAssertEqual(fixture.properties, ["ID  ", "mode", "ID  "])
-        XCTAssertFalse(fixture.properties.contains("URL "))
-        XCTAssertFalse(fixture.properties.contains("pnam"))
+        XCTAssertThrowsError(try capture(windowMismatch).activeTab(matching: expectedWindow))
+        XCTAssertEqual(windowMismatch.properties, ["ID  ", "mode", "ID  "])
+        XCTAssertFalse(windowMismatch.properties.contains("URL "))
+        XCTAssertFalse(windowMismatch.properties.contains("pnam"))
+
+        let tabMismatch = Fixture([ids(["expected-window"]),
+            NSAppleEventDescriptor(string: "normal"), NSAppleEventDescriptor(string: "other-tab")])
+        XCTAssertThrowsError(try capture(tabMismatch).activeTab(matching: expectedWindow))
+        XCTAssertEqual(tabMismatch.properties, ["ID  ", "mode", "ID  "])
+        XCTAssertFalse(tabMismatch.properties.contains("URL "))
+        XCTAssertFalse(tabMismatch.properties.contains("pnam"))
     }
 
     func testWindowOrderChangeBetweenPreflightAndCaptureRefusesBeforeContentReads() throws {
