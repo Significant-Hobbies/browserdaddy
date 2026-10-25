@@ -61,7 +61,7 @@ public enum TabInventory {
             return state(for: kind, application: application)
         } catch BrowserProcess.Failure.notRunning { return .notRunning }
         catch BrowserProcess.Failure.ambiguous {
-            return .failed("Multiple browser instances are running; bring the intended browser forward")
+            return .failed("Multiple browser instances are running; quit extra instances, then refresh")
         } catch { return .failed("Automation couldn’t connect to this browser") }
     }
 

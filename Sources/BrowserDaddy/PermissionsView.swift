@@ -87,6 +87,13 @@ struct PermissionsView: View {
                         Spacer()
                         Text(stateLabel(model.automation[name]))
                             .font(.caption).foregroundStyle(.secondary)
+                        if name == BrowserKind.chrome.displayName,
+                           model.automation[name] != .granted,
+                           model.automation[name] != .denied {
+                            Button("Allow") { model.requestTabConsent(.chrome) }
+                                .textCase(.lowercase)
+                                .disabled(model.automation[name] == .notRunning)
+                        }
                     }
                 }
                 HStack {
@@ -211,7 +218,7 @@ struct PermissionsView: View {
         case .granted: "granted"
         case .denied: "denied — enable in Settings"
         case .notRunning: "browser not running"
-        default: "unknown"
+        default: "not granted or unavailable"
         }
     }
 

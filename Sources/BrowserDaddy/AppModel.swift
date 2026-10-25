@@ -344,7 +344,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Manual re-ask — the "Allow <browser>" affordance in Tabs.
+    /// Explicit consent action shared by setup, Permissions and Tabs.
     func requestTabConsent(_ kind: BrowserKind) {
         if kind == .safari {
             SafariTabsBridge.openPreferences()
@@ -352,7 +352,10 @@ final class AppModel: ObservableObject {
         }
         Task.detached { [weak self] in
             TabInventory.requestConsent(for: kind)
-            await MainActor.run { self?.refreshTabs() }
+            await MainActor.run {
+                self?.refreshPermissions()
+                self?.refreshTabs()
+            }
         }
     }
 

@@ -65,12 +65,22 @@ struct OnboardingView: View {
                     .foregroundStyle(BrowserTheme.coral)
             }
             row(
-                ok: true,
+                ok: model.automation[BrowserKind.chrome.displayName] == .granted,
                 title: "Browser automation",
-                body: "Chromium-family tab capture verifies a normal window before "
-                      + "reading URLs. Browsers that can't prove window mode record "
-                      + "app-level time only.",
-                actionTitle: nil, action: nil)
+                body: "Open Chrome, then allow tab access explicitly. Capture verifies "
+                      + "a normal window before reading URLs; without access, only "
+                      + "app-level time is recorded.",
+                actionTitle: model.automation[BrowserKind.chrome.displayName] == .granted
+                    ? nil : model.automation[BrowserKind.chrome.displayName] == .denied
+                    ? "Open Settings" : "Allow Chrome",
+                action: {
+                    if model.automation[BrowserKind.chrome.displayName] == .denied {
+                        Permissions.openAutomationSettings()
+                    } else {
+                        model.requestTabConsent(.chrome)
+                    }
+                })
+                .disabled(model.automation[BrowserKind.chrome.displayName] == .notRunning)
         }
     }
 
