@@ -121,6 +121,11 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         case unavailable
         case appleEvent(Int?)
         case snapshotUnavailable(ExternalTabSnapshotStage)
+        case foregroundPIDGate(frontmostProcessID: Int,
+                              expectedProcessIDMatches: Bool,
+                              selectedProcessIDMatches: Bool,
+                              topWindowPIDAvailable: Bool,
+                              topWindowProcessIDMatches: Bool)
 
         var errorNumber: Int? {
             if case let .appleEvent(number) = self { return number }
@@ -420,6 +425,14 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         switch error {
         case let .snapshotUnavailable(stage):
             return "External metadata \(operation) failed; stage=\(stage.rawValue)"
+        case let .foregroundPIDGate(frontmostProcessID, expectedProcessIDMatches, selectedProcessIDMatches,
+                                    topWindowPIDAvailable, topWindowProcessIDMatches):
+            return "External metadata \(operation) failed; stage=foregroundPIDGate " +
+                "frontmostProcessID=\(frontmostProcessID) " +
+                "expectedProcessIDMatches=\(expectedProcessIDMatches) " +
+                "selectedProcessIDMatches=\(selectedProcessIDMatches) " +
+                "topWindowPIDAvailable=\(topWindowPIDAvailable) " +
+                "topWindowProcessIDMatches=\(topWindowProcessIDMatches)"
         case let .appleEvent(number):
             return "External metadata \(operation) failed; AppleEventErrorNumber=\(number.map(String.init) ?? "unavailable")"
         case .needsConsent:
@@ -481,8 +494,18 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let processID = Int(application.processIdentifier)
         let selectedPID = NSWorkspace.shared.frontmostApplication.map { Int($0.processIdentifier) } ?? 0
         let topPID = topmostOrdinaryWindowPID().map(Int.init)
-        guard processID == expectedProcessID, selectedPID == processID, topPID == processID else {
-            throw ExternalMetadataFailure.snapshotUnavailable(.foregroundPIDGate)
+        let expectedProcessIDMatches = processID == expectedProcessID
+        let selectedProcessIDMatches = selectedPID == processID
+        let topWindowPIDAvailable = topPID != nil
+        let topWindowProcessIDMatches = topPID == processID
+        guard expectedProcessIDMatches, selectedProcessIDMatches,
+              topWindowPIDAvailable, topWindowProcessIDMatches else {
+            throw ExternalMetadataFailure.foregroundPIDGate(
+                frontmostProcessID: processID,
+                expectedProcessIDMatches: expectedProcessIDMatches,
+                selectedProcessIDMatches: selectedProcessIDMatches,
+                topWindowPIDAvailable: topWindowPIDAvailable,
+                topWindowProcessIDMatches: topWindowProcessIDMatches)
         }
         let reader: ChromiumCapture
         do {
@@ -1279,6 +1302,25 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                            "External metadata snapshot failed; stage=normalTabIDs")
         }
         XCTAssertEqual(tabListEvents, 3)
+    }
+
+    func testForegroundPIDGateDiagnosticReportsOnlyBooleanPredicates() {
+        let message = Self.externalSnapshotFailureMessage(
+            .foregroundPIDGate(frontmostProcessID: 1360,
+                               expectedProcessIDMatches: true,
+                               selectedProcessIDMatches: true,
+                               topWindowPIDAvailable: true,
+                               topWindowProcessIDMatches: false),
+            operation: "snapshot")
+
+        XCTAssertEqual(message,
+                       "External metadata snapshot failed; stage=foregroundPIDGate " +
+                           "frontmostProcessID=1360 " +
+                           "expectedProcessIDMatches=true selectedProcessIDMatches=true " +
+                           "topWindowPIDAvailable=true topWindowProcessIDMatches=false")
+        XCTAssertFalse(message.contains("windowID"))
+        XCTAssertFalse(message.contains("tabID"))
+        XCTAssertFalse(message.contains("Chrome"))
     }
 
     func testExternalMetadataSenderReadsOnlyWindowIDModeAndActiveTabIDInOrder() throws {
