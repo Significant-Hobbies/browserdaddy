@@ -132,7 +132,16 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         // is PID-bound. Explicitly activate the selected PID, then raise only
         // the controlled window. The metadata preflight remains authoritative.
         _ = chrome.activate()
-        _ = try? activateChromeWindow(controlledWindowID)
+        let raiseOutcome: ChromeWindowRaiseOutcome
+        do {
+            raiseOutcome = try activateChromeWindow(controlledWindowID)
+                ? .returnedTrue
+                : .returnedFalse
+        } catch let error as RuntimeProbeError {
+            raiseOutcome = .threw(errorNumber: error.number)
+        } catch {
+            raiseOutcome = .threw(errorNumber: nil)
+        }
 
         do {
             let capture = try ChromiumCapture(application: chrome)
@@ -151,6 +160,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         guard converged.isReady, converged.selectedApplication != nil else {
             reportPreflightFailure(converged, chrome: chrome,
                                    controlledWindowID: controlledWindowID,
+                                   raiseOutcome: raiseOutcome,
                                    skippedCapture: "capture skipped; no tab content read")
             return
         }
@@ -163,6 +173,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
             reportPreflightFailure(beforeFocusCapture, chrome: chrome,
                                    controlledWindowID: controlledWindowID,
+                                   raiseOutcome: raiseOutcome,
                                    skippedCapture: "capture skipped; no tab content read")
             return
         }
@@ -179,6 +190,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
               let frontmost = beforeRoutingCapture.selectedApplication else {
             reportPreflightFailure(beforeRoutingCapture, chrome: chrome,
                                    controlledWindowID: controlledWindowID,
+                                   raiseOutcome: raiseOutcome,
                                    skippedCapture: "routing capture skipped")
             return
         }
@@ -244,6 +256,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     private func reportPreflightFailure(_ preflight: ForegroundPreflight,
                                         chrome: NSRunningApplication,
                                         controlledWindowID: Int,
+                                        raiseOutcome: ChromeWindowRaiseOutcome,
                                         skippedCapture: String) {
         let failures = preflight.failedPredicates.joined(separator: ",")
         let selectedPID = preflight.selectedApplication.map {
@@ -256,7 +269,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             String(describing: $0)
         } ?? "none"
         XCTFail(
-            "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedFrontWindowID=\(frontWindowID); \(skippedCapture)"
+            "Native foreground preflight failed checks: \(failures); raiseOutcome=\(raiseOutcome.diagnosticValue); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedFrontWindowID=\(frontWindowID); \(skippedCapture)"
         )
     }
 
@@ -324,18 +337,40 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         """) == String(id)
     }
 
+    private enum ChromeWindowRaiseOutcome {
+        case returnedTrue
+        case returnedFalse
+        case threw(errorNumber: Int?)
+
+        var diagnosticValue: String {
+            switch self {
+            case .returnedTrue:
+                return "returned-true"
+            case .returnedFalse:
+                return "returned-false"
+            case let .threw(errorNumber):
+                return "threw; AppleScriptErrorNumber=\(errorNumber.map(String.init) ?? "unavailable")"
+            }
+        }
+    }
+
     private func scriptInteger(_ source: String) throws -> Int {
         guard let value = try runScript(source).trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: ":").last,
-              let integer = Int(value) else { throw RuntimeProbeError.script }
+              let integer = Int(value) else { throw RuntimeProbeError.script(number: nil) }
         return integer
     }
 
     private func runScript(_ source: String) throws -> String {
-        guard let script = NSAppleScript(source: source) else { throw RuntimeProbeError.script }
+        guard let script = NSAppleScript(source: source) else {
+            throw RuntimeProbeError.script(number: nil)
+        }
         var error: NSDictionary?
         let result = script.executeAndReturnError(&error)
-        guard error == nil, let value = result.stringValue else { throw RuntimeProbeError.script }
+        guard error == nil, let value = result.stringValue else {
+            let errorNumber = (error?["NSAppleScriptErrorNumber"] as? NSNumber)?.intValue
+            throw RuntimeProbeError.script(number: errorNumber)
+        }
         return value
     }
 
@@ -361,7 +396,14 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         return nil
     }
 
-    private enum RuntimeProbeError: Error { case script }
+    private enum RuntimeProbeError: Error {
+        case script(number: Int?)
+
+        var number: Int? {
+            guard case let .script(number) = self else { return nil }
+            return number
+        }
+    }
 
     private func verifyNoCarryForward(capture: (String, String), canary: String) throws {
         let directory = FileManager.default.temporaryDirectory
