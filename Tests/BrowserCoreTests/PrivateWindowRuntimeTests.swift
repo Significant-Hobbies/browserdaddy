@@ -114,6 +114,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     }
 
     private static let externalCanaryURLKey = "BROWSERDADDY_EXTERNAL_CANARY_URL"
+    private static let externalCanaryTitle = "BrowserDaddy Controlled Canary"
 
     func testChromeWindowPrivacyAtTheActualCaptureBoundaries() throws {
         let environment = ProcessInfo.processInfo.environment
@@ -224,8 +225,9 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                     XCTFail("External capture metadata gate failed; focus capture skipped")
                     return
                 }
-                guard captured.0 == canaryURL else {
-                    XCTFail("Focused capture did not match the fixed external canary; values omitted")
+                guard Self.matchesExternalCanaryContent(url: captured.0, title: captured.1,
+                                                        expectedURL: canaryURL) else {
+                    XCTFail("Focused capture did not match the fixed external canary URL and title; values omitted")
                     return
                 }
 
@@ -294,7 +296,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         return true
     }
 
-    /// Resolves only a single added native tab in an unchanged normal window.
+    /// Resolves one added native tab among unchanged window identities and modes.
     /// The target must be active and in Chrome's first (capture) window after creation.
     private static func resolveExternalCanaryTarget(baseline: ExternalTabSnapshot,
                                                     current: ExternalTabSnapshot,
@@ -307,13 +309,15 @@ final class PrivateWindowRuntimeTests: XCTestCase {
 
         let beforeIDs = baseline.windows.map(\.windowID)
         let afterIDs = current.windows.map(\.windowID)
-        guard beforeIDs == afterIDs,
+        guard Set(beforeIDs) == Set(afterIDs),
+              beforeIDs.count == afterIDs.count,
               let firstWindow = current.windows.first,
               firstWindow.mode == "normal" else { return nil }
 
+        let beforeByID = Dictionary(uniqueKeysWithValues: baseline.windows.map { ($0.windowID, $0) })
         var added: [(windowID: Int, tabID: Int)] = []
-        for (before, after) in zip(baseline.windows, current.windows) {
-            guard before.windowID == after.windowID, before.mode == after.mode else { return nil }
+        for after in current.windows {
+            guard let before = beforeByID[after.windowID], before.mode == after.mode else { return nil }
             if before.mode == "incognito" { continue }
             guard let oldTabs = before.tabIDs, let newTabs = after.tabIDs,
                   let oldActive = before.activeTabID, let newActive = after.activeTabID else { return nil }
@@ -351,6 +355,12 @@ final class PrivateWindowRuntimeTests: XCTestCase {
               path.range(of: #"^/browserdaddy-canary/[A-Za-z0-9_-]{16,64}$"#, options: .regularExpression) != nil,
               components.string == rawValue else { return nil }
         return rawValue
+    }
+
+    private static func matchesExternalCanaryContent(url: String,
+                                                     title: String,
+                                                     expectedURL: String) -> Bool {
+        url == expectedURL && title == externalCanaryTitle
     }
 
     private static func matchesExternalCanary(_ gate: ExternalMetadataGate,
@@ -1008,20 +1018,29 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             processID: 1360, selectedPID: 1360, topWindowPID: 1360,
             windows: [
                 ExternalWindowSnapshot(windowID: 10, mode: "normal", tabIDs: [1, 2], activeTabID: 1),
-                ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3], activeTabID: 3),
+                ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5], activeTabID: 3),
                 ExternalWindowSnapshot(windowID: 30, mode: "incognito", tabIDs: nil, activeTabID: nil),
             ])
         let after = ExternalTabSnapshot(
             processID: 1360, selectedPID: 1360, topWindowPID: 1360,
             windows: [
                 ExternalWindowSnapshot(windowID: 10, mode: "normal", tabIDs: [1, 2, 99], activeTabID: 99),
-                ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3], activeTabID: 3),
+                ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5], activeTabID: 3),
                 ExternalWindowSnapshot(windowID: 30, mode: "incognito", tabIDs: nil, activeTabID: nil),
             ])
 
         XCTAssertEqual(Self.resolveExternalCanaryTarget(baseline: before, current: after,
                                                         expectedPID: 1360),
                        ExternalCanaryTarget(processID: 1360, windowID: 10, tabID: 99))
+        let reorderedWithTargetFirst = ExternalTabSnapshot(
+            processID: 1360, selectedPID: 1360, topWindowPID: 1360,
+            windows: [
+                ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5, 98], activeTabID: 98),
+                before.windows[0], before.windows[2],
+            ])
+        XCTAssertEqual(Self.resolveExternalCanaryTarget(baseline: before, current: reorderedWithTargetFirst,
+                                                        expectedPID: 1360),
+                       ExternalCanaryTarget(processID: 1360, windowID: 20, tabID: 98))
 
         let rejected: [ExternalTabSnapshot] = [
             ExternalTabSnapshot(processID: 1361, selectedPID: 1361, topWindowPID: 1361,
@@ -1044,7 +1063,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             ExternalTabSnapshot(processID: 1360, selectedPID: 1360, topWindowPID: 1360,
                                 windows: [
                                     after.windows[0],
-                                    ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3], activeTabID: 4),
+                                    ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5], activeTabID: 5),
                                     after.windows[2],
                                 ]), // another window selection changed
             ExternalTabSnapshot(processID: 1360, selectedPID: 1360, topWindowPID: 1360,
@@ -1055,8 +1074,10 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                 ]), // private mode changed and its IDs are not inspected
             ExternalTabSnapshot(processID: 1360, selectedPID: 1360, topWindowPID: 1360,
                                 windows: [
-                                    after.windows[1], after.windows[0], after.windows[2],
-                                ]), // target is no longer the first capture window
+                                    after.windows[0],
+                                    ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5, 99], activeTabID: 99),
+                                    after.windows[2],
+                                ]), // only new tab is owned by a non-first window
             ExternalTabSnapshot(processID: 1360, selectedPID: 1360, topWindowPID: 1360,
                                 windows: [after.windows[0], after.windows[1]]), // window set changed
         ]
@@ -1067,6 +1088,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     }
 
     func testExternalCanaryURLIsStrictLoopbackHTTPWithBoundedPortAndNoncePath() {
+        XCTAssertNil(Self.externalCanaryURL(nil))
         XCTAssertEqual(Self.externalCanaryURL("http://127.0.0.1:49152/browserdaddy-canary/abcdefghijklmnop"),
                        "http://127.0.0.1:49152/browserdaddy-canary/abcdefghijklmnop")
         for value in [
@@ -1082,6 +1104,19 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         ] {
             XCTAssertNil(Self.externalCanaryURL(value), "Unexpectedly accepted \(value)")
         }
+    }
+
+    func testExternalCanaryContentMustMatchTheControlledFixtureURLAndTitle() {
+        let url = "http://127.0.0.1:49152/browserdaddy-canary/abcdefghijklmnop"
+        XCTAssertTrue(Self.matchesExternalCanaryContent(url: url,
+                                                        title: "BrowserDaddy Controlled Canary",
+                                                        expectedURL: url))
+        XCTAssertFalse(Self.matchesExternalCanaryContent(url: "http://example.com/",
+                                                         title: "BrowserDaddy Controlled Canary",
+                                                         expectedURL: url))
+        XCTAssertFalse(Self.matchesExternalCanaryContent(url: url,
+                                                         title: "Unexpected page",
+                                                         expectedURL: url))
     }
 
     func testExternalTabSnapshotReadsNormalTabIDsAndSkipsPrivateTabIDs() throws {
