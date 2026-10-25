@@ -8,6 +8,19 @@ import BrowserCore
 struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
 
+    private var chromeAutomation: Permissions.AutomationState {
+        model.automation[BrowserKind.chrome.displayName] ?? .unknown
+    }
+
+    private var automationActionTitle: String? {
+        switch chromeAutomation {
+        case .granted: nil
+        case .ambiguous, .notRunning: "Re-check"
+        case .denied: "Open Settings"
+        case .unknown: "Allow Chrome"
+        }
+    }
+
     var body: some View {
         ScrollView {
             SMCard(padding: 40) {
@@ -69,25 +82,24 @@ struct OnboardingView: View {
                     .foregroundStyle(BrowserTheme.coral)
             }
             row(
-                ok: model.automation[BrowserKind.chrome.displayName] == .granted,
+                ok: chromeAutomation == .granted,
                 title: "Browser automation",
-                body: model.automation[BrowserKind.chrome.displayName] == .ambiguous
+                body: chromeAutomation == .ambiguous
                     ? "Multiple Chrome instances are running. Quit extra instances, then return here."
                     : "Open Chrome, then allow tab access explicitly. Capture verifies "
                       + "a normal window before reading URLs; without access, only "
                       + "app-level time is recorded.",
-                actionTitle: [Permissions.AutomationState.granted, .ambiguous]
-                    .contains(model.automation[BrowserKind.chrome.displayName] ?? .unknown)
-                    ? nil : model.automation[BrowserKind.chrome.displayName] == .denied
-                    ? "Open Settings" : "Allow Chrome",
+                actionTitle: automationActionTitle,
                 action: {
-                    if model.automation[BrowserKind.chrome.displayName] == .denied {
+                    switch chromeAutomation {
+                    case .ambiguous, .notRunning:
+                        model.refreshPermissions()
+                    case .denied:
                         Permissions.openAutomationSettings()
-                    } else {
+                    default:
                         model.requestTabConsent(.chrome)
                     }
                 })
-                .disabled(model.automation[BrowserKind.chrome.displayName] == .notRunning)
         }
     }
 
