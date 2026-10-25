@@ -87,6 +87,88 @@ final class ChromiumCaptureTests: XCTestCase {
         XCTAssertEqual(checkedWindow.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue, OSType(formUniqueID))
     }
 
+    func testActiveTabMetadataUsesCaptureWindowOrderWithoutReadingContent() throws {
+        // The first ID is the target ChromiumCapture.activeTab() will read even
+        // when a legacy AppleScript front-window observation would name another.
+        let fixture = Fixture([ids(["capture-target", "legacy-front-window"]),
+            NSAppleEventDescriptor(string: "normal"), NSAppleEventDescriptor(string: "canary-tab")])
+        let metadata = try XCTUnwrap(capture(fixture).activeTabMetadata())
+
+        XCTAssertEqual(metadata, ChromiumCapture.ActiveTabMetadata(
+            windowID: "capture-target", mode: "normal", activeTabID: "canary-tab"))
+        XCTAssertNotEqual(metadata.windowID, "legacy-front-window")
+        XCTAssertEqual(fixture.properties, ["ID  ", "mode", "ID  "])
+        XCTAssertFalse(fixture.properties.contains("URL "))
+        XCTAssertFalse(fixture.properties.contains("pnam"))
+    }
+
+    func testActiveTabMetadataMismatchRefusesBeforeURLOrTitleReads() throws {
+        let expectedWindow = ChromiumCapture.ActiveTabMetadata(
+            windowID: "expected-window", mode: "normal", activeTabID: "canary-tab")
+        let windowMismatch = Fixture([ids(["capture-target", "expected-window"]),
+            NSAppleEventDescriptor(string: "normal"), NSAppleEventDescriptor(string: "canary-tab")])
+
+        XCTAssertThrowsError(try capture(windowMismatch).activeTab(matching: expectedWindow))
+        XCTAssertEqual(windowMismatch.properties, ["ID  ", "mode", "ID  "])
+        XCTAssertFalse(windowMismatch.properties.contains("URL "))
+        XCTAssertFalse(windowMismatch.properties.contains("pnam"))
+
+        let tabMismatch = Fixture([ids(["expected-window"]),
+            NSAppleEventDescriptor(string: "normal"), NSAppleEventDescriptor(string: "other-tab")])
+        XCTAssertThrowsError(try capture(tabMismatch).activeTab(matching: expectedWindow))
+        XCTAssertEqual(tabMismatch.properties, ["ID  ", "mode", "ID  "])
+        XCTAssertFalse(tabMismatch.properties.contains("URL "))
+        XCTAssertFalse(tabMismatch.properties.contains("pnam"))
+    }
+
+    func testWindowOrderChangeBetweenPreflightAndCaptureRefusesBeforeContentReads() throws {
+        let fixture = Fixture([
+            ids(["approved-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "approved-tab"),
+            ids(["new-front-window", "approved-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "other-tab"),
+            NSAppleEventDescriptor(string: "https://wrong.example/"), NSAppleEventDescriptor(string: "Wrong"),
+        ])
+        let reader = try capture(fixture)
+        let approved = try XCTUnwrap(reader.activeTabMetadata())
+
+        XCTAssertThrowsError(try reader.activeTab(matching: approved))
+        XCTAssertEqual(fixture.properties, ["ID  ", "mode", "ID  ", "ID  ", "mode", "ID  "])
+        XCTAssertFalse(fixture.properties.contains("URL "))
+        XCTAssertFalse(fixture.properties.contains("pnam"))
+    }
+
+    func testIdentityBoundCaptureReadsContentFromApprovedPinnedTarget() throws {
+        let fixture = Fixture([
+            ids(["approved-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "approved-tab"),
+            ids(["approved-window", "other-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "approved-tab"),
+            NSAppleEventDescriptor(string: "https://fixture.example/"), NSAppleEventDescriptor(string: "Fixture"),
+        ])
+        let reader = try capture(fixture)
+        let approved = try XCTUnwrap(reader.activeTabMetadata())
+
+        let value = try reader.activeTab(matching: approved)
+
+        XCTAssertEqual(value?.url, "https://fixture.example/")
+        XCTAssertEqual(value?.title, "Fixture")
+        XCTAssertEqual(fixture.properties, ["ID  ", "mode", "ID  ", "ID  ", "mode", "ID  ", "URL ", "pnam"])
+        let contentTab = try XCTUnwrap(fixture.specifiers.suffix(2).first?.forKeyword(AEKeyword(keyAEContainer)))
+        let contentWindow = try XCTUnwrap(contentTab.forKeyword(AEKeyword(keyAEContainer)))
+        assertUnique(contentWindow, type: "cwin", id: "approved-window")
+    }
+
+    func testPrivateActiveTabMetadataDoesNotReadTabIdentityOrContent() throws {
+        let fixture = Fixture([ids(["private-window", "normal-window"]),
+            NSAppleEventDescriptor(string: "incognito")])
+        let metadata = try XCTUnwrap(capture(fixture).activeTabMetadata())
+
+        XCTAssertEqual(metadata, ChromiumCapture.ActiveTabMetadata(
+            windowID: "private-window", mode: "incognito", activeTabID: nil))
+        XCTAssertEqual(fixture.properties, ["ID  ", "mode"])
+    }
+
     func testInventorySkipsPrivateWindowBeforeEnumeratingItsTabs() throws {
         let fixture = Fixture([ids(["private", "normal"]),
             NSAppleEventDescriptor(string: "incognito"), NSAppleEventDescriptor(string: "normal"),

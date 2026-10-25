@@ -301,6 +301,13 @@ public enum FrontmostTab {
     public static func capture(
         frontmost: NSRunningApplication? = NSWorkspace.shared.frontmostApplication
     ) -> Result {
+        capture(frontmost: frontmost, matching: nil)
+    }
+
+    static func capture(
+        frontmost: NSRunningApplication?,
+        matching expectedTarget: ChromiumCapture.ActiveTabMetadata?
+    ) -> Result {
         guard let app = frontmost,
               let kind = BrowserKind.allCases.first(
                 where: { $0.bundleIdentifier == app.bundleIdentifier })
@@ -309,7 +316,14 @@ public enum FrontmostTab {
             return .unavailable(browser: kind)
         }
         do {
-            guard let tab = try ChromiumCapture(application: app).activeTab() else {
+            let capture = try ChromiumCapture(application: app)
+            let tab: (url: String, title: String)?
+            if let expectedTarget {
+                tab = try capture.activeTab(matching: expectedTarget)
+            } else {
+                tab = try capture.activeTab()
+            }
+            guard let tab else {
                 return .unavailable(browser: kind)
             }
             return .url(browser: kind, value: tab.url)

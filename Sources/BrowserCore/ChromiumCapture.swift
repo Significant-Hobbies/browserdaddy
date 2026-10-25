@@ -50,6 +50,18 @@ struct ChromiumCapture {
         case needsConsent, unavailable
     }
 
+    struct ActiveTabMetadata: Equatable {
+        let windowID: String
+        let mode: String
+        let activeTabID: String?
+    }
+
+    private struct ActiveTabTarget {
+        let metadata: ActiveTabMetadata
+        let window: NSAppleEventDescriptor
+        let tabID: NSAppleEventDescriptor?
+    }
+
     static let supportedBundleIDs: Set<String> = [
         "com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac",
         "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
@@ -106,15 +118,28 @@ struct ChromiumCapture {
         return try mode(of: window(id))
     }
 
+    /// Resolves the same first window and active tab identity used by activeTab(),
+    /// without fetching either URL or title.
+    func activeTabMetadata() throws -> ActiveTabMetadata? {
+        try activeTabTarget()?.metadata
+    }
+
     func activeTab() throws -> (url: String, title: String)? {
-        guard let id = try windowIDs().first else { return nil }
-        let container = try window(id)
-        guard try mode(of: container) == "normal" else { return nil }
-        let active = try Self.property("acTa", of: container)
-        let tabID = try get(Self.property("ID  ", of: active))
-        let tab = try Self.object("CrTb", form: formUniqueID, key: tabID, container: container)
-        let content = try content(of: tab)
-        return content.url.isEmpty ? nil : content
+        guard let target = try activeTabTarget(),
+              target.metadata.mode == "normal",
+              let tabID = target.tabID else { return nil }
+        return try activeTabContent(target, tabID: tabID)
+    }
+
+    /// Captures content only when the exact window and tab preflighted by the
+    /// caller remain the current capture target. The target is re-resolved once
+    /// and that same pinned window/tab specifier is used for URL/title reads.
+    func activeTab(matching expected: ActiveTabMetadata) throws -> (url: String, title: String)? {
+        guard let target = try activeTabTarget(),
+              target.metadata == expected,
+              target.metadata.mode == "normal",
+              let tabID = target.tabID else { throw Failure.unavailable }
+        return try activeTabContent(target, tabID: tabID)
     }
 
     func inventory(browser: BrowserKind) throws -> [BrowserTab] {
@@ -155,6 +180,39 @@ struct ChromiumCapture {
 
     private func window(_ id: NSAppleEventDescriptor) throws -> NSAppleEventDescriptor {
         try Self.object("cwin", form: formUniqueID, key: id, container: .null())
+    }
+
+    private func activeTabTarget() throws -> ActiveTabTarget? {
+        guard let id = try windowIDs().first, let windowID = id.stringValue,
+              !windowID.isEmpty else { return nil }
+        let container = try window(id)
+        let windowMode = try mode(of: container)
+        guard windowMode == "normal" else {
+            return ActiveTabTarget(
+                metadata: ActiveTabMetadata(windowID: windowID, mode: windowMode,
+                                            activeTabID: nil),
+                window: container,
+                tabID: nil)
+        }
+
+        let active = try Self.property("acTa", of: container)
+        let tabID = try get(Self.property("ID  ", of: active))
+        guard let activeTabID = tabID.stringValue, !activeTabID.isEmpty else {
+            throw Failure.unavailable
+        }
+        return ActiveTabTarget(
+            metadata: ActiveTabMetadata(windowID: windowID, mode: windowMode,
+                                        activeTabID: activeTabID),
+            window: container,
+            tabID: tabID)
+    }
+
+    private func activeTabContent(_ target: ActiveTabTarget,
+                                  tabID: NSAppleEventDescriptor) throws -> (url: String, title: String)? {
+        let tab = try Self.object("CrTb", form: formUniqueID, key: tabID,
+                                  container: target.window)
+        let content = try content(of: tab)
+        return content.url.isEmpty ? nil : content
     }
 
     private func mode(of window: NSAppleEventDescriptor) throws -> String {

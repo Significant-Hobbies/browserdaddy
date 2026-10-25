@@ -12,35 +12,38 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let selectedApplication: NSRunningApplication?
         let selectedPIDMatches: Bool
         let topWindowPIDMatches: Bool
-        let frontWindowMatches: Bool
+        let captureWindowMatches: Bool
         let windowModeMatches: Bool
         let activeTabMatches: Bool
         let observedTopWindowPID: pid_t?
-        let observedFrontWindowID: Int?
+        let observedCaptureWindowID: Int?
+        let captureTarget: ChromiumCapture.ActiveTabMetadata?
 
         init(selectedApplication: NSRunningApplication?,
              selectedPIDMatches: Bool,
              topWindowPIDMatches: Bool,
-             frontWindowMatches: Bool,
+             captureWindowMatches: Bool,
              windowModeMatches: Bool = true,
              activeTabMatches: Bool = true,
              observedTopWindowPID: pid_t? = nil,
-             observedFrontWindowID: Int? = nil) {
+             observedCaptureWindowID: Int? = nil,
+             captureTarget: ChromiumCapture.ActiveTabMetadata? = nil) {
             self.selectedApplication = selectedApplication
             self.selectedPIDMatches = selectedPIDMatches
             self.topWindowPIDMatches = topWindowPIDMatches
-            self.frontWindowMatches = frontWindowMatches
+            self.captureWindowMatches = captureWindowMatches
             self.windowModeMatches = windowModeMatches
             self.activeTabMatches = activeTabMatches
             self.observedTopWindowPID = observedTopWindowPID
-            self.observedFrontWindowID = observedFrontWindowID
+            self.observedCaptureWindowID = observedCaptureWindowID
+            self.captureTarget = captureTarget
         }
 
         var failedPredicates: [String] {
             var failures: [String] = []
             if !selectedPIDMatches { failures.append("selectedApplicationPID") }
             if !topWindowPIDMatches { failures.append("topmostOrdinaryWindowPID") }
-            if !frontWindowMatches { failures.append("controlledChromeFrontWindowID") }
+            if !captureWindowMatches { failures.append("controlledChromeCaptureWindowID") }
             if !windowModeMatches { failures.append("controlledWindowNormalMode") }
             if !activeTabMatches { failures.append("controlledCanaryActiveTabID") }
             return failures
@@ -151,7 +154,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                     XCTFail("External capture metadata gate failed; focus capture skipped")
                     return
                 }
-                let captured = FocusWatcher.browserTab(beforeFocus.application)
+                let target = Self.captureTarget(beforeFocus.gate)
+                let captured = FocusWatcher.browserTab(beforeFocus.application, matching: target)
                 guard captured.0 == Self.externalCanaryURL else {
                     XCTFail("Focused capture did not match the fixed external canary; values omitted")
                     return
@@ -165,7 +169,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                     XCTFail("External routing metadata gate failed; routing capture skipped")
                     return
                 }
-                switch FrontmostTab.capture(frontmost: beforeRouting.application) {
+                switch FrontmostTab.capture(frontmost: beforeRouting.application,
+                                            matching: Self.captureTarget(beforeRouting.gate)) {
                 case let .url(browser, value):
                     XCTAssertTrue(browser == .chrome && value == Self.externalCanaryURL,
                                   "Routing capture did not match the fixed external canary; values omitted")
@@ -201,6 +206,11 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             && gate.topWindowPID == expectedPID
             && gate.firstWindowID == expectedWindowID
             && gate.activeTabID == expectedTabID
+    }
+
+    private static func captureTarget(_ gate: ExternalMetadataGate) -> ChromiumCapture.ActiveTabMetadata {
+        ChromiumCapture.ActiveTabMetadata(windowID: String(gate.firstWindowID), mode: gate.mode,
+                                          activeTabID: String(gate.activeTabID))
     }
 
     private static func positiveInteger(_ value: String?) -> Int? {
@@ -434,14 +444,15 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let beforeFocusCapture = foregroundPreflight(chrome: chrome,
                                                     controlledWindowID: canary.windowID,
                                                     expectedActiveTabID: canary.canaryTabID)
-        guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
+        guard beforeFocusCapture.isReady,
+              let captureTarget = beforeFocusCapture.captureTarget else {
             reportPreflightFailure(beforeFocusCapture, chrome: chrome,
                                    controlledWindowID: canary.windowID,
                                    skippedCapture: "capture skipped; no tab content read")
             return
         }
-        print("BrowserDaddy controlled normal tab canary gates: nativePID=true, topWindowPID=true, frontWindow=true, normalMode=true, canaryActive=true")
-        let captured = FocusWatcher.browserTab(chrome)
+        print("BrowserDaddy controlled normal tab canary gates: nativePID=true, topWindowPID=true, captureWindow=true, normalMode=true, canaryActive=true")
+        let captured = FocusWatcher.browserTab(chrome, matching: captureTarget)
         guard captured.0 == url else {
             XCTFail("Focused capture did not match the controlled canary; routing capture skipped; values omitted")
             return
@@ -451,13 +462,14 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                                        controlledWindowID: canary.windowID,
                                                        expectedActiveTabID: canary.canaryTabID)
         guard beforeRoutingCapture.isReady,
-              let frontmost = beforeRoutingCapture.selectedApplication else {
+              let frontmost = beforeRoutingCapture.selectedApplication,
+              let captureTarget = beforeRoutingCapture.captureTarget else {
             reportPreflightFailure(beforeRoutingCapture, chrome: chrome,
                                    controlledWindowID: canary.windowID,
                                    skippedCapture: "routing capture skipped")
             return
         }
-        let routed = FrontmostTab.capture(frontmost: frontmost)
+        let routed = FrontmostTab.capture(frontmost: frontmost, matching: captureTarget)
         switch routed {
         case let .url(browser, value):
             XCTAssertTrue(browser == .chrome && value == url,
@@ -471,13 +483,28 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         guard isOriginalChromeProcessRunning(chrome) else {
             return nil
         }
-        guard let result = try? runScript("""
-        tell application id "com.google.Chrome"
-            set controlledWindow to front window
-            return ((id of front window) as text) & "|" & (mode of controlledWindow) & "|" & ((id of active tab of controlledWindow) as text) & "|" & ((active tab index of controlledWindow) as text)
-        end tell
-        """) else { return nil }
-        return parseWindowState(result)
+        return captureTargetState(chrome: chrome)
+    }
+
+    /// Uses the same first-window resolver as production capture. The only
+    /// AppleScript value read here is the active tab's numeric position, needed
+    /// to restore selection after closing the task-owned canary tab.
+    private func captureTargetState(chrome: NSRunningApplication) -> ControlledWindowState? {
+        guard let metadata = try? ChromiumCapture(application: chrome).activeTabMetadata(),
+              metadata.mode == "normal",
+              let activeTabID = metadata.activeTabID,
+              let windowID = Int(metadata.windowID),
+              isSafeTabIdentifier(activeTabID),
+              let activeTabIndex = try? scriptInteger("""
+              tell application id "com.google.Chrome"
+                  set controlledWindow to window id \(windowID)
+                  return (active tab index of controlledWindow) as text
+              end tell
+              """), activeTabIndex > 0 else { return nil }
+        return ControlledWindowState(frontWindowID: windowID,
+                                     mode: metadata.mode,
+                                     activeTabID: activeTabID,
+                                     activeTabIndex: activeTabIndex)
     }
 
     private func windowState(id: Int, chrome: NSRunningApplication) -> ControlledWindowState? {
@@ -868,17 +895,18 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     ) -> ForegroundPreflight {
         let selectedApplication = NSWorkspace.shared.frontmostApplication
         let topWindowPID = topmostOrdinaryWindowPID()
-        let state = windowState(id: controlledWindowID, chrome: chrome)
+        let metadata = try? ChromiumCapture(application: chrome).activeTabMetadata()
         return ForegroundPreflight(
             selectedApplication: selectedApplication,
             selectedPIDMatches: selectedApplication?.processIdentifier == chrome.processIdentifier
                 && selectedApplication?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
             topWindowPIDMatches: topWindowPID == chrome.processIdentifier,
-            frontWindowMatches: state?.frontWindowID == controlledWindowID,
-            windowModeMatches: state?.mode == "normal",
-            activeTabMatches: state?.activeTabID == expectedActiveTabID,
+            captureWindowMatches: metadata?.windowID == String(controlledWindowID),
+            windowModeMatches: metadata?.mode == "normal",
+            activeTabMatches: metadata?.activeTabID == expectedActiveTabID,
             observedTopWindowPID: topWindowPID,
-            observedFrontWindowID: state?.frontWindowID
+            observedCaptureWindowID: metadata.flatMap { Int($0.windowID) },
+            captureTarget: metadata
         )
     }
 
@@ -893,20 +921,20 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let topWindowPID = preflight.observedTopWindowPID.map {
             String(describing: $0)
         } ?? "none"
-        let frontWindowID = preflight.observedFrontWindowID.map {
+        let captureWindowID = preflight.observedCaptureWindowID.map {
             String(describing: $0)
         } ?? "none"
         XCTFail(
-            "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedFrontWindowID=\(frontWindowID); \(skippedCapture)"
+            "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedCaptureWindowID=\(captureWindowID); \(skippedCapture)"
         )
     }
 
     func testForegroundPreflightWaitsForMetadataConvergence() {
         let samples = [
             ForegroundPreflight(selectedApplication: nil, selectedPIDMatches: false,
-                                topWindowPIDMatches: false, frontWindowMatches: true),
+                                topWindowPIDMatches: false, captureWindowMatches: true),
             ForegroundPreflight(selectedApplication: nil, selectedPIDMatches: true,
-                                topWindowPIDMatches: true, frontWindowMatches: true),
+                                topWindowPIDMatches: true, captureWindowMatches: true),
         ]
         var sampleIndex = 0
         var pauses = 0
@@ -926,7 +954,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let result = waitForForegroundPreflight(maxSamples: 2, sample: {
             sampleCount += 1
             return ForegroundPreflight(selectedApplication: nil, selectedPIDMatches: true,
-                                       topWindowPIDMatches: false, frontWindowMatches: true)
+                                       topWindowPIDMatches: false, captureWindowMatches: true)
         }, pause: { _ in })
 
         XCTAssertEqual(result.failedPredicates, ["topmostOrdinaryWindowPID"])
