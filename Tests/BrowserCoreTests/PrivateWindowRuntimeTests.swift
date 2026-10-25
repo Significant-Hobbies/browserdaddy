@@ -81,7 +81,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     }
 
     /// Metadata-only view used to bind a CUA-created normal tab to Chrome's
-    /// native tab identifier. Private windows are represented by mode alone.
+    /// native tab identifier. Private windows include no tab or active-tab IDs.
     private struct ExternalWindowSnapshot: Codable, Equatable {
         let windowID: Int
         let mode: String
