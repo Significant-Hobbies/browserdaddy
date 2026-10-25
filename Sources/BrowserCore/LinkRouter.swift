@@ -301,46 +301,34 @@ public enum FrontmostTab {
     public static func capture(
         frontmost: NSRunningApplication? = NSWorkspace.shared.frontmostApplication
     ) -> Result {
+        capture(frontmost: frontmost, matching: nil)
+    }
+
+    static func capture(
+        frontmost: NSRunningApplication?,
+        matching expectedTarget: ChromiumCapture.ActiveTabMetadata?
+    ) -> Result {
         guard let app = frontmost,
               let kind = BrowserKind.allCases.first(
                 where: { $0.bundleIdentifier == app.bundleIdentifier })
         else { return .notBrowser(app: frontmost?.localizedName ?? "unknown") }
-        guard let source = tabScript(kind: kind) else {
+        guard ChromiumCapture.supportedBundleIDs.contains(kind.bundleIdentifier) else {
             return .unavailable(browser: kind)
         }
-        var err: NSDictionary?
-        let value = NSAppleScript(source: source)?
-            .executeAndReturnError(&err).stringValue ?? ""
-        if let err,
-           (err[NSAppleScript.errorNumber] as? Int) == -1743 {
+        do {
+            let capture = try ChromiumCapture(application: app)
+            let tab: (url: String, title: String)?
+            if let expectedTarget {
+                tab = try capture.activeTab(matching: expectedTarget)
+            } else {
+                tab = try capture.activeTab()
+            }
+            guard let tab else {
+                return .unavailable(browser: kind)
+            }
+            return .url(browser: kind, value: tab.url)
+        } catch ChromiumCapture.Failure.needsConsent {
             return .needsConsent(browser: kind)
-        }
-        guard err == nil, !value.isEmpty else { return .unavailable(browser: kind) }
-        return .url(browser: kind, value: value)
-    }
-
-    static func tabScript(kind: BrowserKind) -> String? {
-        switch kind {
-        case .safari:
-            // Safari AppleScript has no private-window flag. The Safari app
-            // extension handles normal tabs after checking that flag.
-            return nil
-        case .chrome, .brave, .edge, .vivaldi, .arc, .opera, .chromium:
-            // Window mode distinguishes normal/incognito in the Chromium
-            // scripting dictionary (verified in Chrome + Brave sdefs) — a
-            // private tab must never be moved into another browser's
-            // history. Where a browser's dictionary lacks `mode` the script
-            // errors and we fail closed (.unavailable) rather than risk
-            // leaking a private tab.
-            return """
-                tell application id "\(kind.bundleIdentifier)"
-                    if (count of windows) is 0 then return ""
-                    if (mode of front window) is not "normal" then return ""
-                    return URL of active tab of front window
-                end tell
-                """
-        case .firefox:
-            return nil
-        }
+        } catch { return .unavailable(browser: kind) }
     }
 }

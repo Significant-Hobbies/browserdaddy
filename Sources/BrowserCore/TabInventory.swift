@@ -39,15 +39,12 @@ public enum TabSourceState: Equatable, Sendable {
     case failed(String)
 }
 
-/// Enumerates and manipulates open tabs across scriptable browsers via
-/// AppleScript. Incognito windows are filtered via the Chromium window mode
-/// (verified on Chrome and Brave; requested for every Chromium-family sdef —
-/// where `mode` is missing the script errors and the caller fails closed).
+/// Enumerates open tabs using PID-addressed Apple events. Incognito windows
+/// are filtered before any tab content is requested. Missing window-mode
+/// support fails closed; positional tab actions refuse ambiguous processes.
 /// Safari is handled by its native extension, which checks the page's
 /// Private Browsing flag before sharing.
 public enum TabInventory {
-    private static let fs = "\u{1f}"  // unit separator, same as FocusWatcher
-
     public static func inventory() -> [(kind: BrowserKind, state: TabSourceState)] {
         // The signed sandbox permits Apple events to Chrome only. Keep this
         // list aligned with Support/Release.entitlements.
@@ -58,36 +55,25 @@ public enum TabInventory {
     }
 
     public static func state(for kind: BrowserKind) -> TabSourceState {
-        guard let script = listScript(kind: kind) else { return .unsupported }
-        guard let runningApp = NSRunningApplication.runningApplications(
-            withBundleIdentifier: kind.bundleIdentifier).first else {
-            return .notRunning
+        guard ChromiumCapture.supportedBundleIDs.contains(kind.bundleIdentifier) else { return .unsupported }
+        do {
+            let application = try BrowserProcess.application(bundleID: kind.bundleIdentifier)
+            return state(for: kind, application: application)
+        } catch BrowserProcess.Failure.notRunning { return .notRunning }
+        catch BrowserProcess.Failure.ambiguous {
+            return .failed("Multiple browser instances are running; quit extra instances, then refresh")
+        } catch { return .failed("Automation couldn’t connect to this browser") }
+    }
+
+    static func state(for kind: BrowserKind, application: NSRunningApplication) -> TabSourceState {
+        guard application.bundleIdentifier == kind.bundleIdentifier else {
+            return .failed("The selected browser process changed")
         }
-        let address = NSAppleEventDescriptor(
-            processIdentifier: runningApp.processIdentifier)
-        let permission = withExtendedLifetime(address) {
-            AEDeterminePermissionToAutomateTarget(
-                address.aeDesc, AEEventClass(typeWildCard),
-                AEEventID(typeWildCard), false)
-        }
-        if permission == errAEEventNotPermitted
-            || permission == errAEEventWouldRequireUserConsent {
-            return .needsConsent
-        }
-        guard permission == noErr else {
-            return .failed("Automation couldn’t connect to this browser")
-        }
-        var err: NSDictionary?
-        let raw = NSAppleScript(source: script)?
-            .executeAndReturnError(&err).stringValue ?? ""
-        if let err {
-            let code = err[NSAppleScript.errorNumber] as? Int
-            if code == -1743 { return .needsConsent }
-            return .failed(err[NSAppleScript.errorMessage] as? String
-                           ?? "script error \(code ?? 0)")
-        }
-        let tabs = parse(raw, browser: kind)
-        return tabs.isEmpty ? .noWindows : .tabs(tabs)
+        do {
+            let tabs = try ChromiumCapture(application: application).inventory(browser: kind)
+            return tabs.isEmpty ? .noWindows : .tabs(tabs)
+        } catch ChromiumCapture.Failure.needsConsent { return .needsConsent }
+        catch { return .failed("Automation couldn’t read this browser’s tabs") }
     }
 
     /// Actively ask macOS for Automation consent to a browser — fires the
@@ -96,21 +82,18 @@ public enum TabInventory {
     /// user must flip the toggle in System Settings.
     @discardableResult
     public static func requestConsent(for kind: BrowserKind) -> Bool {
-        guard let runningApp = NSRunningApplication.runningApplications(
-            withBundleIdentifier: kind.bundleIdentifier).first else { return false }
-        let address = NSAppleEventDescriptor(
-            processIdentifier: runningApp.processIdentifier)
-        // Check the broad grant needed for tab enumeration, not just a
-        // single Apple event that macOS may allow without consent.
-        return withExtendedLifetime(address) {
-            AEDeterminePermissionToAutomateTarget(
-                address.aeDesc, AEEventClass(typeWildCard),
-                AEEventID(typeWildCard), true) == noErr
+        guard let application = try? BrowserProcess.application(bundleID: kind.bundleIdentifier) else {
+            return false
         }
+        let address = NSAppleEventDescriptor(processIdentifier: application.processIdentifier)
+        return ChromiumCapture.permission(address: address, prompt: true) == noErr
     }
 
     public static func close(_ tab: BrowserTab) -> TabSourceState {
-        run("""
+        guard BrowserProcess.permitsUnboundAction(bundleID: tab.browser.bundleIdentifier) else {
+            return .failed("Tab actions are unavailable while browser instances are ambiguous")
+        }
+        return run("""
             tell application id "\(tab.browser.bundleIdentifier)"
                 close tab \(tab.index) of window \(tab.window)
             end tell
@@ -118,6 +101,9 @@ public enum TabInventory {
     }
 
     public static func focus(_ tab: BrowserTab) -> TabSourceState {
+        guard BrowserProcess.permitsUnboundAction(bundleID: tab.browser.bundleIdentifier) else {
+            return .failed("Tab actions are unavailable while browser instances are ambiguous")
+        }
         let raise = tab.browser == .safari
             ? """
                 tell application id "\(tab.browser.bundleIdentifier)"
@@ -152,52 +138,4 @@ public enum TabInventory {
                        ?? "script error \(code ?? 0)")
     }
 
-    /// Rows of `window␟index␟url␟title` per line.
-    private static func parse(_ raw: String, browser: BrowserKind) -> [BrowserTab] {
-        raw.split(separator: "\n").compactMap { line in
-            let f = line.split(separator: Character(fs), omittingEmptySubsequences: false)
-            guard f.count >= 3,
-                  let w = Int(f[0]), let t = Int(f[1]) else { return nil }
-            let url = String(f[2])
-            guard !url.isEmpty else { return nil }
-            let title = f.count > 3 ? f[3...].joined(separator: fs) : ""
-            return BrowserTab(browser: browser, window: w, index: t,
-                              url: url, title: title)
-        }
-    }
-
-    static func listScript(kind: BrowserKind) -> String? {
-        let tabProps: String
-        switch kind {
-        case .safari: return nil
-        case .firefox: return nil
-        default:      tabProps = "(URL of tab t of window w) & s & (title of tab t of window w)"
-        }
-        let body = """
-                    repeat with t from 1 to (count of tabs of window w)
-                        try
-                            set out to out & w & s & t & s & \(tabProps) & linefeed
-                        end try
-                    end repeat
-            """
-        // Every kind reaching this point is Chromium-family — its sdef
-        // ships the window `mode` property, so anything that isn't normal
-        // (incognito) is skipped. A dictionary without `mode` makes the
-        // whole script error, which fails closed in `state(for:)`.
-        let loop = """
-            repeat with w from 1 to (count of windows)
-                if (mode of window w) is "normal" then
-        \(body)
-                end if
-            end repeat
-        """
-        return """
-            tell application id "\(kind.bundleIdentifier)"
-                set s to (ASCII character 31)
-                set out to ""
-            \(loop)
-                return out
-            end tell
-            """
-    }
 }

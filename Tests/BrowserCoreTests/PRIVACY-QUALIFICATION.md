@@ -5,22 +5,27 @@ access. A skipped, failed or setup-blocked attempt is never a privacy pass.
 No test requests Automation access, opens the owner archive, imports history,
 changes browser settings, invokes classification, or prints tab URLs/titles.
 
-Use a dedicated Chrome window with this disposable page:
-`https://example.com/?browserdaddy-qualification=20261023`.
-Keep it open during the private stage. Run these stages separately:
+The current automatic harness is normal-only. Private and recovery modes
+deliberately skip, so they are not runnable qualification stages. Do not run
+them against owner windows or interpret their skips as privacy evidence.
 
-1. Normal window: `BROWSERDADDY_PRIVACY_MODE=normal swift test --filter PrivateWindowRuntimeTests`.
-2. Open one Incognito window through browser UI with the same canary page.
-   Run with `BROWSERDADDY_PRIVACY_MODE=private`.
-3. Close only the test Incognito window through UI, return to the normal
-   canary, then run with `BROWSERDADDY_PRIVACY_MODE=recovery`.
+Normal mode uses one controlled tab in the already-front normal Chrome window
+with this inert canary URL:
+`about:blank#browserdaddy-qualification-20261024`.
+It records native window/tab IDs, requires the selected foreground process and
+top on-screen ordinary window to be the same Chrome PID, and binds every
+capture read to the approved normal window and canary tab. It closes only the
+created tab and restores the prior active tab afterward. It does not enumerate
+unrelated tab content.
 
-Normal/recovery require the exact canary in real capture and routing output.
-Private requires an actual Incognito window, empty focus URL/title,
-unavailable routing capture, and one normal canary inventory entry instead
-of two. The actual private capture is also applied to a temporary focus
-archive to check that previous public attention is not carried forward.
-Missing consent or an inventory error cannot masquerade as private exclusion.
+Run: `BROWSERDADDY_PRIVACY_MODE=normal swift test --filter PrivateWindowRuntimeTests`.
+
+Normal qualification requires the exact canary in real capture and routing
+output. A denied-consent or foreground-identity failure stops before content;
+it is not a normal capture pass. Live private/recovery qualification needs an
+isolated task-owned browser process and remains an explicit coverage limit.
+Deterministic tests cover private/unknown exclusion, inventory ordering and
+focus carry-forward; they are not live-browser privacy proof.
 
 This qualifies capture kernels in the test executable. It does not establish
 installed-package identity, sandbox/TCC equivalence or full sampler behavior.

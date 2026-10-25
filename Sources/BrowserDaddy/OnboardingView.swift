@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SaaSMakerUI
 import BrowserCore
@@ -6,6 +7,19 @@ import BrowserCore
 /// optional topic classification, then land on the app.
 struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
+
+    private var chromeAutomation: Permissions.AutomationState {
+        model.automation[BrowserKind.chrome.displayName] ?? .unknown
+    }
+
+    private var automationActionTitle: String? {
+        switch chromeAutomation {
+        case .granted: nil
+        case .ambiguous, .notRunning: "Re-check"
+        case .denied: "Open Settings"
+        case .unknown: "Allow Chrome"
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -26,6 +40,9 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(BrowserTheme.fog)
         .onAppear { model.refreshPermissions() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshPermissions()
+        }
     }
 
     private var header: some View {
@@ -65,12 +82,24 @@ struct OnboardingView: View {
                     .foregroundStyle(BrowserTheme.coral)
             }
             row(
-                ok: true,
+                ok: chromeAutomation == .granted,
                 title: "Browser automation",
-                body: "Chromium-family tab capture verifies a normal window before "
-                      + "reading URLs. Browsers that can't prove window mode record "
-                      + "app-level time only.",
-                actionTitle: nil, action: nil)
+                body: chromeAutomation == .ambiguous
+                    ? "Multiple Chrome instances are running. Quit extra instances, then return here."
+                    : "Open Chrome, then allow tab access explicitly. Capture verifies "
+                      + "a normal window before reading URLs; without access, only "
+                      + "app-level time is recorded.",
+                actionTitle: automationActionTitle,
+                action: {
+                    switch chromeAutomation {
+                    case .ambiguous, .notRunning:
+                        model.refreshPermissions()
+                    case .denied:
+                        Permissions.openAutomationSettings()
+                    default:
+                        model.requestTabConsent(.chrome)
+                    }
+                })
         }
     }
 
