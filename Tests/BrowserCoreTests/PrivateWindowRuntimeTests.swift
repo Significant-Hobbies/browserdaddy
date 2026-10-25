@@ -13,6 +13,22 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let selectedPIDMatches: Bool
         let topWindowPIDMatches: Bool
         let frontWindowMatches: Bool
+        let observedTopWindowPID: pid_t?
+        let observedFrontWindowID: Int?
+
+        init(selectedApplication: NSRunningApplication?,
+             selectedPIDMatches: Bool,
+             topWindowPIDMatches: Bool,
+             frontWindowMatches: Bool,
+             observedTopWindowPID: pid_t? = nil,
+             observedFrontWindowID: Int? = nil) {
+            self.selectedApplication = selectedApplication
+            self.selectedPIDMatches = selectedPIDMatches
+            self.topWindowPIDMatches = topWindowPIDMatches
+            self.frontWindowMatches = frontWindowMatches
+            self.observedTopWindowPID = observedTopWindowPID
+            self.observedFrontWindowID = observedFrontWindowID
+        }
 
         var failedPredicates: [String] {
             var failures: [String] = []
@@ -112,6 +128,12 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             return
         }
 
+        // AppleScript setup resolves Chrome by bundle ID, while capture below
+        // is PID-bound. Explicitly activate the selected PID, then raise only
+        // the controlled window. The metadata preflight remains authoritative.
+        _ = chrome.activate()
+        _ = try? activateChromeWindow(controlledWindowID)
+
         do {
             let capture = try ChromiumCapture(application: chrome)
             guard try capture.frontWindowMode() == "normal" else {
@@ -127,7 +149,9 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             foregroundPreflight(chrome: chrome, controlledWindowID: controlledWindowID)
         }
         guard converged.isReady, converged.selectedApplication != nil else {
-            reportPreflightFailure(converged, skippedCapture: "capture skipped; no tab content read")
+            reportPreflightFailure(converged, chrome: chrome,
+                                   controlledWindowID: controlledWindowID,
+                                   skippedCapture: "capture skipped; no tab content read")
             return
         }
 
@@ -137,7 +161,9 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let beforeFocusCapture = foregroundPreflight(chrome: chrome,
                                                     controlledWindowID: controlledWindowID)
         guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
-            reportPreflightFailure(beforeFocusCapture, skippedCapture: "capture skipped; no tab content read")
+            reportPreflightFailure(beforeFocusCapture, chrome: chrome,
+                                   controlledWindowID: controlledWindowID,
+                                   skippedCapture: "capture skipped; no tab content read")
             return
         }
         print("BrowserDaddy controlled normal canary gates: nativePID=true, topWindowPID=true, frontWindow=true, oneTab=true")
@@ -151,7 +177,9 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                                        controlledWindowID: controlledWindowID)
         guard beforeRoutingCapture.isReady,
               let frontmost = beforeRoutingCapture.selectedApplication else {
-            reportPreflightFailure(beforeRoutingCapture, skippedCapture: "routing capture skipped")
+            reportPreflightFailure(beforeRoutingCapture, chrome: chrome,
+                                   controlledWindowID: controlledWindowID,
+                                   skippedCapture: "routing capture skipped")
             return
         }
         let routed = FrontmostTab.capture(frontmost: frontmost)
@@ -199,21 +227,36 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         controlledWindowID: Int
     ) -> ForegroundPreflight {
         let selectedApplication = NSWorkspace.shared.frontmostApplication
+        let topWindowPID = topmostOrdinaryWindowPID()
+        let frontWindowID = try? scriptInteger(
+            "tell application id \"com.google.Chrome\" to get id of front window")
         return ForegroundPreflight(
             selectedApplication: selectedApplication,
             selectedPIDMatches: selectedApplication?.processIdentifier == chrome.processIdentifier
                 && selectedApplication?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
-            topWindowPIDMatches: topmostOrdinaryWindowPID() == chrome.processIdentifier,
-            frontWindowMatches: (try? scriptInteger(
-                "tell application id \"com.google.Chrome\" to get id of front window")) == controlledWindowID
+            topWindowPIDMatches: topWindowPID == chrome.processIdentifier,
+            frontWindowMatches: frontWindowID == controlledWindowID,
+            observedTopWindowPID: topWindowPID,
+            observedFrontWindowID: frontWindowID
         )
     }
 
     private func reportPreflightFailure(_ preflight: ForegroundPreflight,
+                                        chrome: NSRunningApplication,
+                                        controlledWindowID: Int,
                                         skippedCapture: String) {
         let failures = preflight.failedPredicates.joined(separator: ",")
+        let selectedPID = preflight.selectedApplication.map {
+            String(describing: $0.processIdentifier)
+        } ?? "none"
+        let topWindowPID = preflight.observedTopWindowPID.map {
+            String(describing: $0)
+        } ?? "none"
+        let frontWindowID = preflight.observedFrontWindowID.map {
+            String(describing: $0)
+        } ?? "none"
         XCTFail(
-            "Native foreground preflight did not converge; failed metadata checks: \(failures); \(skippedCapture)"
+            "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedFrontWindowID=\(frontWindowID); \(skippedCapture)"
         )
     }
 
