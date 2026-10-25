@@ -102,10 +102,25 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let tabID: Int
     }
 
+    private enum ExternalTabSnapshotStage: String, CaseIterable {
+        case frontmostApplication
+        case foregroundPIDGate
+        case reader
+        case windowIDs
+        case windowID
+        case windowSpecifier
+        case windowMode
+        case normalTabIDs
+        case activeTabID
+        case foregroundAfterRead
+        case snapshotValidation
+    }
+
     private enum ExternalMetadataFailure: Error {
         case needsConsent
         case unavailable
         case appleEvent(Int?)
+        case snapshotUnavailable(ExternalTabSnapshotStage)
 
         var errorNumber: Int? {
             if case let .appleEvent(number) = self { return number }
@@ -160,7 +175,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             } catch ExternalMetadataFailure.needsConsent {
                 throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested")
             } catch let error as ExternalMetadataFailure {
-                XCTFail("External metadata snapshot failed; AppleEventErrorNumber=\(error.errorNumber.map(String.init) ?? "unavailable")")
+                XCTFail(Self.externalSnapshotFailureMessage(error, operation: "snapshot"))
             }
         case "resolve":
             guard let expectedPID = Self.positiveInteger(environment["BROWSERDADDY_EXPECTED_PID"]),
@@ -182,7 +197,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             } catch ExternalMetadataFailure.needsConsent {
                 throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested")
             } catch let error as ExternalMetadataFailure {
-                XCTFail("External metadata resolve failed; AppleEventErrorNumber=\(error.errorNumber.map(String.init) ?? "unavailable"); content capture skipped")
+                XCTFail(Self.externalSnapshotFailureMessage(error, operation: "resolve") + "; content capture skipped")
             }
         case "identify":
             guard let expectedPID = Self.positiveInteger(environment["BROWSERDADDY_EXPECTED_PID"]),
@@ -400,6 +415,20 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         return integer
     }
 
+    private static func externalSnapshotFailureMessage(_ error: ExternalMetadataFailure,
+                                                        operation: String) -> String {
+        switch error {
+        case let .snapshotUnavailable(stage):
+            return "External metadata \(operation) failed; stage=\(stage.rawValue)"
+        case let .appleEvent(number):
+            return "External metadata \(operation) failed; AppleEventErrorNumber=\(number.map(String.init) ?? "unavailable")"
+        case .needsConsent:
+            return "External metadata \(operation) failed; category=needsConsent"
+        case .unavailable:
+            return "External metadata \(operation) failed; category=unavailable"
+        }
+    }
+
     private func externalMetadataSnapshot(expectedProcessID: Int) throws -> ExternalMetadataSnapshot {
         guard let application = NSWorkspace.shared.frontmostApplication,
               !application.isTerminated,
@@ -447,13 +476,13 @@ final class PrivateWindowRuntimeTests: XCTestCase {
               !application.isTerminated,
               application.activationPolicy == .regular,
               application.bundleIdentifier == BrowserKind.chrome.bundleIdentifier else {
-            throw ExternalMetadataFailure.unavailable
+            throw ExternalMetadataFailure.snapshotUnavailable(.frontmostApplication)
         }
         let processID = Int(application.processIdentifier)
         let selectedPID = NSWorkspace.shared.frontmostApplication.map { Int($0.processIdentifier) } ?? 0
         let topPID = topmostOrdinaryWindowPID().map(Int.init)
         guard processID == expectedProcessID, selectedPID == processID, topPID == processID else {
-            throw ExternalMetadataFailure.unavailable
+            throw ExternalMetadataFailure.snapshotUnavailable(.foregroundPIDGate)
         }
         let reader: ChromiumCapture
         do {
@@ -461,18 +490,18 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         } catch ChromiumCapture.Failure.needsConsent {
             throw ExternalMetadataFailure.needsConsent
         } catch {
-            throw ExternalMetadataFailure.unavailable
+            throw ExternalMetadataFailure.snapshotUnavailable(.reader)
         }
         let windows = try externalTabWindows(reader: reader, application: application)
         let selectedAfterRead = NSWorkspace.shared.frontmostApplication.map { Int($0.processIdentifier) } ?? 0
         let topAfterRead = topmostOrdinaryWindowPID().map(Int.init)
         guard !application.isTerminated, selectedAfterRead == processID, topAfterRead == processID else {
-            throw ExternalMetadataFailure.unavailable
+            throw ExternalMetadataFailure.snapshotUnavailable(.foregroundAfterRead)
         }
         let snapshot = ExternalTabSnapshot(processID: processID, selectedPID: selectedPID,
                                            topWindowPID: topPID, windows: windows)
         guard Self.isSafeExternalTabSnapshot(snapshot, expectedPID: expectedProcessID) else {
-            throw ExternalMetadataFailure.unavailable
+            throw ExternalMetadataFailure.snapshotUnavailable(.snapshotValidation)
         }
         return snapshot
     }
@@ -480,38 +509,82 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     private func externalTabWindows(reader: ChromiumCapture,
                                     application: NSRunningApplication?,
                                     send: ChromiumCapture.Send? = nil) throws -> [ExternalWindowSnapshot] {
-        let windows = try pidBoundMetadataGet(externalMetadataWindowsSpecifier(), reader: reader,
+        let windowsSpecifier: NSAppleEventDescriptor
+        do {
+            windowsSpecifier = try externalMetadataWindowsSpecifier()
+        } catch {
+            throw ExternalMetadataFailure.snapshotUnavailable(.windowIDs)
+        }
+        let windows: NSAppleEventDescriptor
+        do {
+            windows = try pidBoundMetadataGet(windowsSpecifier, reader: reader,
                                               application: application, send: send)
+        } catch let failure as ExternalMetadataFailure {
+            if case .appleEvent = failure { throw failure }
+            throw ExternalMetadataFailure.snapshotUnavailable(.windowIDs)
+        } catch {
+            throw ExternalMetadataFailure.snapshotUnavailable(.windowIDs)
+        }
         guard windows.descriptorType == typeAEList,
               windows.numberOfItems > 0, windows.numberOfItems <= 10_000 else {
-            throw ExternalMetadataFailure.unavailable
+            throw ExternalMetadataFailure.snapshotUnavailable(.windowIDs)
         }
         var result: [ExternalWindowSnapshot] = []
         for index in 1...windows.numberOfItems {
             guard let windowDescriptor = windows.atIndex(index),
                   let windowID = numericIdentifier(windowDescriptor) else {
-                throw ExternalMetadataFailure.unavailable
+                throw ExternalMetadataFailure.snapshotUnavailable(.windowID)
             }
-            let specifiers = try externalMetadataWindowSpecifiers(windowDescriptor)
-            let modeDescriptor = try pidBoundMetadataGet(specifiers[0], reader: reader,
+            let specifiers: [NSAppleEventDescriptor]
+            do {
+                specifiers = try externalMetadataWindowSpecifiers(windowDescriptor)
+            } catch {
+                throw ExternalMetadataFailure.snapshotUnavailable(.windowSpecifier)
+            }
+            let modeDescriptor: NSAppleEventDescriptor
+            do {
+                modeDescriptor = try pidBoundMetadataGet(specifiers[0], reader: reader,
                                                          application: application, send: send)
+            } catch let failure as ExternalMetadataFailure {
+                if case .appleEvent = failure { throw failure }
+                throw ExternalMetadataFailure.snapshotUnavailable(.windowMode)
+            } catch {
+                throw ExternalMetadataFailure.snapshotUnavailable(.windowMode)
+            }
             guard let mode = modeDescriptor.stringValue, mode == "normal" || mode == "incognito" else {
-                throw ExternalMetadataFailure.unavailable
+                throw ExternalMetadataFailure.snapshotUnavailable(.windowMode)
             }
             guard mode == "normal" else {
                 result.append(ExternalWindowSnapshot(windowID: windowID, mode: mode,
                                                      tabIDs: nil, activeTabID: nil))
                 continue
             }
-            let tabIDsDescriptor = try pidBoundMetadataGet(try externalMetadataAllTabIDsSpecifier(windowDescriptor),
-                                                           reader: reader, application: application, send: send)
-            guard let tabIDs = numericIdentifiers(tabIDsDescriptor), !tabIDs.isEmpty else {
-                throw ExternalMetadataFailure.unavailable
+            let tabIDsDescriptor: NSAppleEventDescriptor
+            do {
+                let specifier = try externalMetadataAllTabIDsSpecifier(windowDescriptor)
+                tabIDsDescriptor = try pidBoundMetadataGet(specifier, reader: reader,
+                                                           application: application, send: send)
+            } catch let failure as ExternalMetadataFailure {
+                if case .appleEvent = failure { throw failure }
+                throw ExternalMetadataFailure.snapshotUnavailable(.normalTabIDs)
+            } catch {
+                throw ExternalMetadataFailure.snapshotUnavailable(.normalTabIDs)
             }
-            let activeTabIDDescriptor = try pidBoundMetadataGet(specifiers[1], reader: reader,
+            guard let tabIDs = numericIdentifiers(tabIDsDescriptor), !tabIDs.isEmpty else {
+                throw ExternalMetadataFailure.snapshotUnavailable(.normalTabIDs)
+            }
+            let activeTabIDDescriptor: NSAppleEventDescriptor
+            do {
+                activeTabIDDescriptor = try pidBoundMetadataGet(specifiers[1], reader: reader,
                                                                 application: application, send: send)
+            } catch let failure as ExternalMetadataFailure {
+                if case .appleEvent = failure { throw failure }
+                throw ExternalMetadataFailure.snapshotUnavailable(.activeTabID)
+            } catch {
+                throw ExternalMetadataFailure.snapshotUnavailable(.activeTabID)
+            }
             guard let activeTabID = numericIdentifier(activeTabIDDescriptor) else {
-                throw ExternalMetadataFailure.unavailable
+                throw ExternalMetadataFailure.snapshotUnavailable(.activeTabID)
             }
             result.append(ExternalWindowSnapshot(windowID: windowID, mode: mode,
                                                  tabIDs: tabIDs, activeTabID: activeTabID))
@@ -1158,6 +1231,54 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let privateModeSpecifier = try XCTUnwrap(events[4].paramDescriptor(forKeyword: keyDirectObject))
         let privateWindow = try XCTUnwrap(privateModeSpecifier.forKeyword(AEKeyword(keyAEContainer)))
         XCTAssertEqual(privateWindow.forKeyword(AEKeyword(keyAEKeyData))?.int32Value, 20)
+    }
+
+    func testExternalSnapshotFailureStagesAreFiniteAndOmitIdentifiers() throws {
+        XCTAssertEqual(ExternalTabSnapshotStage.allCases.map(\.rawValue), [
+            "frontmostApplication", "foregroundPIDGate", "reader", "windowIDs", "windowID",
+            "windowSpecifier", "windowMode", "normalTabIDs", "activeTabID",
+            "foregroundAfterRead", "snapshotValidation",
+        ])
+
+        let expectedPID = pid_t(1360)
+        let reader = try ChromiumCapture(processID: expectedPID, permission: { _ in noErr }, send: { _, _ in
+            XCTFail("Snapshot fixture must use the injected sender")
+            return self.externalReply(.null())
+        })
+        var windowListEvents = 0
+        XCTAssertThrowsError(try externalTabWindows(reader: reader, application: nil, send: { _, _ in
+            windowListEvents += 1
+            return self.externalReply(.null())
+        })) { error in
+            guard let failure = error as? ExternalMetadataFailure,
+                  case .snapshotUnavailable(.windowIDs) = failure else {
+                return XCTFail("Expected only a safe windowIDs failure category")
+            }
+            XCTAssertEqual(Self.externalSnapshotFailureMessage(failure, operation: "snapshot"),
+                           "External metadata snapshot failed; stage=windowIDs")
+        }
+        XCTAssertEqual(windowListEvents, 1)
+
+        var tabListEvents = 0
+        XCTAssertThrowsError(try externalTabWindows(reader: reader, application: nil, send: { _, _ in
+            tabListEvents += 1
+            switch tabListEvents {
+            case 1: return self.externalReply(self.externalIDs([1588750628]))
+            case 2: return self.externalReply(NSAppleEventDescriptor(string: "normal"))
+            case 3: return self.externalReply(NSAppleEventDescriptor(string: "malformed numeric identifier"))
+            default:
+                XCTFail("Snapshot must refuse before any active-tab or content read")
+                return self.externalReply(.null())
+            }
+        })) { error in
+            guard let failure = error as? ExternalMetadataFailure,
+                  case .snapshotUnavailable(.normalTabIDs) = failure else {
+                return XCTFail("Expected only a safe normalTabIDs failure category")
+            }
+            XCTAssertEqual(Self.externalSnapshotFailureMessage(failure, operation: "snapshot"),
+                           "External metadata snapshot failed; stage=normalTabIDs")
+        }
+        XCTAssertEqual(tabListEvents, 3)
     }
 
     func testExternalMetadataSenderReadsOnlyWindowIDModeAndActiveTabIDInOrder() throws {
