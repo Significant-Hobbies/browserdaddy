@@ -4,8 +4,8 @@ import XCTest
 @testable import BrowserCore
 
 /// Opt-in, real-browser qualification. Ordinary CI never reads open tabs.
-/// Normal mode creates and later closes one controlled canary window. Private
-/// and recovery modes retain the operator-supplied window flow.
+/// Normal mode uses one controlled tab in the already-front normal window.
+/// Private and recovery inventory are withheld from owner browser windows.
 @MainActor
 final class PrivateWindowRuntimeTests: XCTestCase {
     private struct ForegroundPreflight {
@@ -13,6 +13,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let selectedPIDMatches: Bool
         let topWindowPIDMatches: Bool
         let frontWindowMatches: Bool
+        let windowModeMatches: Bool
+        let activeTabMatches: Bool
         let observedTopWindowPID: pid_t?
         let observedFrontWindowID: Int?
 
@@ -20,12 +22,16 @@ final class PrivateWindowRuntimeTests: XCTestCase {
              selectedPIDMatches: Bool,
              topWindowPIDMatches: Bool,
              frontWindowMatches: Bool,
+             windowModeMatches: Bool = true,
+             activeTabMatches: Bool = true,
              observedTopWindowPID: pid_t? = nil,
              observedFrontWindowID: Int? = nil) {
             self.selectedApplication = selectedApplication
             self.selectedPIDMatches = selectedPIDMatches
             self.topWindowPIDMatches = topWindowPIDMatches
             self.frontWindowMatches = frontWindowMatches
+            self.windowModeMatches = windowModeMatches
+            self.activeTabMatches = activeTabMatches
             self.observedTopWindowPID = observedTopWindowPID
             self.observedFrontWindowID = observedFrontWindowID
         }
@@ -35,10 +41,26 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             if !selectedPIDMatches { failures.append("selectedApplicationPID") }
             if !topWindowPIDMatches { failures.append("topmostOrdinaryWindowPID") }
             if !frontWindowMatches { failures.append("controlledChromeFrontWindowID") }
+            if !windowModeMatches { failures.append("controlledWindowNormalMode") }
+            if !activeTabMatches { failures.append("controlledCanaryActiveTabID") }
             return failures
         }
 
         var isReady: Bool { failedPredicates.isEmpty }
+    }
+
+    private struct ControlledWindowState {
+        let frontWindowID: Int
+        let mode: String
+        let activeTabID: String
+        let activeTabIndex: Int
+    }
+
+    private struct ControlledCanaryTab {
+        let windowID: Int
+        let previousActiveTabID: String
+        let previousActiveTabIndex: Int
+        let canaryTabID: String
     }
 
     func testChromeWindowPrivacyAtTheActualCaptureBoundaries() throws {
@@ -48,136 +70,103 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
         XCTAssertTrue(["normal", "private", "recovery"].contains(mode))
         guard ["normal", "private", "recovery"].contains(mode) else { return }
+        guard mode == "normal" else {
+            throw XCTSkip("This harness path is normal-only; private/recovery inventory is not read from owner windows")
+        }
         let canary = "about:blank#browserdaddy-qualification-20261024"
-        if mode == "normal" {
-            try runControlledNormalCanary(url: canary)
-            return
-        }
-
-        let chrome = try BrowserProcess.application(bundleID: BrowserKind.chrome.bundleIdentifier)
-        let reader: ChromiumCapture
-        do { reader = try ChromiumCapture(application: chrome) }
-        catch ChromiumCapture.Failure.needsConsent {
-            throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested")
-        }
-        // Use the same selected GUI process at every capture boundary. Checking
-        // window mode never asks for its URL or title.
-        let windowMode = try reader.frontWindowMode() ?? "no-window"
-        let expectedWindow = mode == "private" ? "incognito" : "normal"
-        guard windowMode == expectedWindow else {
-            XCTFail("Canary window type mismatch: \(windowMode); no URL or title read")
-            return
-        }
-        let captured = FocusWatcher.browserTab(chrome)
-        let routed = FrontmostTab.capture(frontmost: chrome)
-        guard case let .tabs(tabs) = TabInventory.state(for: .chrome, application: chrome) else {
-            XCTFail("Actual tab inventory did not complete; an empty/error response is not privacy proof")
-            return
-        }
-        if mode == "private" {
-            XCTAssertTrue(captured.0.isEmpty && captured.1.isEmpty,
-                          "Private focus capture must contain neither URL nor title")
-            XCTAssertTrue(routed == .unavailable(browser: .chrome),
-                          "Private routing capture must be unavailable; values omitted")
-            // The normal canary stays open behind the private window. Exactly
-            // one copy proves inventory works while excluding its private twin.
-            XCTAssertEqual(tabs.filter { $0.url == canary }.count, 1)
-            try verifyNoCarryForward(capture: captured, canary: canary)
-        }
+        try runControlledNormalCanary(url: canary)
     }
 
     private func runControlledNormalCanary(url: String) throws {
-        let chrome = try BrowserProcess.application(bundleID: BrowserKind.chrome.bundleIdentifier)
+        let bundleID = BrowserKind.chrome.bundleIdentifier
+        guard BrowserProcess.permitsUnboundAction(bundleID: bundleID) else {
+            XCTFail("Normal canary requires one regular Chrome process; no tab content read")
+            return
+        }
+        let chrome = try BrowserProcess.application(bundleID: bundleID)
         do { _ = try ChromiumCapture(application: chrome) }
         catch ChromiumCapture.Failure.needsConsent {
             throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested")
         }
-        let previousApplication = NSWorkspace.shared.frontmostApplication
-        var previousChromeWindowID: Int?
-        if previousApplication?.processIdentifier == chrome.processIdentifier {
-            guard let id = try? scriptInteger(
-                "tell application id \"com.google.Chrome\" to get id of front window") else {
-                XCTFail("Could not preserve the previously frontmost Chrome window")
+        guard let selected = NSWorkspace.shared.frontmostApplication,
+              selected.processIdentifier == chrome.processIdentifier,
+              selected.bundleIdentifier == bundleID,
+              topmostOrdinaryWindowPID() == chrome.processIdentifier else {
+            XCTFail("Chrome must already own the frontmost ordinary window; no tab content read")
+            return
+        }
+        guard let previous = frontWindowState(chrome: chrome),
+              previous.mode == "normal",
+              isSafeTabIdentifier(previous.activeTabID),
+              previous.activeTabIndex > 0 else {
+            XCTFail("Front Chrome window is not a safe normal-tab target; no tab content read")
+            return
+        }
+
+        let initialPreflight = foregroundPreflight(chrome: chrome,
+                                                   controlledWindowID: previous.frontWindowID,
+                                                   expectedActiveTabID: previous.activeTabID)
+        guard initialPreflight.isReady, initialPreflight.selectedApplication != nil else {
+            reportPreflightFailure(initialPreflight, chrome: chrome,
+                                   controlledWindowID: previous.frontWindowID,
+                                   skippedCapture: "tab creation skipped; no tab content read")
+            return
+        }
+
+        let canaryTabID: String
+        do {
+            guard let created = try createControlledCanaryTab(
+                chrome: chrome,
+                windowID: previous.frontWindowID,
+                previousActiveTabID: previous.activeTabID,
+                previousActiveTabIndex: previous.activeTabIndex,
+                url: url
+            ) else {
+                XCTFail("Chrome front-tab state changed before canary creation; no tab content read")
                 return
             }
-            previousChromeWindowID = id
-        }
-
-        // Create a window and retain its ID before setting its only tab to the
-        // disposable URL. This probe never enumerates unrelated tabs.
-        guard let controlledWindowID = try? createNormalWindow(), controlledWindowID > 0 else {
-            XCTFail("Could not create the controlled normal canary window")
-            return
-        }
-        print("BrowserDaddy controlled normal canary created: windowID=\(controlledWindowID)")
-        defer {
-            let closed = (try? closeWindow(controlledWindowID)) ?? false
-            XCTAssertTrue(closed, "Could not close only the controlled canary window")
-            if let previousApplication {
-                if previousApplication.processIdentifier == chrome.processIdentifier,
-                   let previousChromeWindowID {
-                    _ = try? activateChromeWindow(previousChromeWindowID)
-                } else {
-                    _ = previousApplication.activate()
-                }
-            }
-        }
-
-        guard (try? prepareWindow(controlledWindowID, url: url)) == true else {
-            XCTFail("Could not prepare one normal canary tab; values omitted")
-            return
-        }
-
-        // AppleScript setup resolves Chrome by bundle ID, while capture below
-        // is PID-bound. Explicitly activate the selected PID, then raise only
-        // the controlled window. The metadata preflight remains authoritative.
-        _ = chrome.activate()
-        let raiseOutcome: ChromeWindowRaiseOutcome
-        do {
-            raiseOutcome = try activateChromeWindow(controlledWindowID)
-                ? .returnedTrue
-                : .returnedFalse
+            canaryTabID = created
         } catch let error as RuntimeProbeError {
-            raiseOutcome = .threw(errorNumber: error.number)
+            let failure = error.cleanupFailed
+                ? "Canary tab setup failed and owned-tab cleanup could not be confirmed"
+                : "Canary tab setup failed"
+            XCTFail("\(failure); AppleScriptErrorNumber=\(error.number.map(String.init) ?? "unavailable"); no tab content read")
+            return
         } catch {
-            raiseOutcome = .threw(errorNumber: nil)
-        }
-
-        do {
-            let capture = try ChromiumCapture(application: chrome)
-            guard try capture.frontWindowMode() == "normal" else {
-                XCTFail("Controlled front window was not confirmed normal; no tab content read")
-                return
-            }
-        } catch {
-            XCTFail("Controlled normal window mode was unavailable; no tab content read")
+            XCTFail("Canary tab setup failed; no tab content read")
             return
         }
-
-        let converged = waitForForegroundPreflight {
-            foregroundPreflight(chrome: chrome, controlledWindowID: controlledWindowID)
-        }
-        guard converged.isReady, converged.selectedApplication != nil else {
-            reportPreflightFailure(converged, chrome: chrome,
-                                   controlledWindowID: controlledWindowID,
-                                   raiseOutcome: raiseOutcome,
-                                   skippedCapture: "capture skipped; no tab content read")
-            return
-        }
+        let canary = ControlledCanaryTab(windowID: previous.frontWindowID,
+                                         previousActiveTabID: previous.activeTabID,
+                                         previousActiveTabIndex: previous.activeTabIndex,
+                                         canaryTabID: canaryTabID)
+        defer { cleanupCanaryTab(canary, chrome: chrome) }
 
         // The disposable canary is assumed idle during this bounded check. OS
         // window metadata and subsequent browser AppleEvents cannot be sampled
         // atomically, so this normal-stage probe is not a complete privacy proof.
-        let beforeFocusCapture = foregroundPreflight(chrome: chrome,
-                                                    controlledWindowID: controlledWindowID)
-        guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
-            reportPreflightFailure(beforeFocusCapture, chrome: chrome,
-                                   controlledWindowID: controlledWindowID,
-                                   raiseOutcome: raiseOutcome,
+        let converged = waitForForegroundPreflight {
+            foregroundPreflight(chrome: chrome,
+                                controlledWindowID: canary.windowID,
+                                expectedActiveTabID: canary.canaryTabID)
+        }
+        guard converged.isReady, converged.selectedApplication != nil else {
+            reportPreflightFailure(converged, chrome: chrome,
+                                   controlledWindowID: canary.windowID,
                                    skippedCapture: "capture skipped; no tab content read")
             return
         }
-        print("BrowserDaddy controlled normal canary gates: nativePID=true, topWindowPID=true, frontWindow=true, oneTab=true")
+
+        let beforeFocusCapture = foregroundPreflight(chrome: chrome,
+                                                    controlledWindowID: canary.windowID,
+                                                    expectedActiveTabID: canary.canaryTabID)
+        guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
+            reportPreflightFailure(beforeFocusCapture, chrome: chrome,
+                                   controlledWindowID: canary.windowID,
+                                   skippedCapture: "capture skipped; no tab content read")
+            return
+        }
+        print("BrowserDaddy controlled normal tab canary gates: nativePID=true, topWindowPID=true, frontWindow=true, normalMode=true, canaryActive=true")
         let captured = FocusWatcher.browserTab(chrome)
         guard captured.0 == url else {
             XCTFail("Focused capture did not match the controlled canary; routing capture skipped; values omitted")
@@ -185,12 +174,12 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
 
         let beforeRoutingCapture = foregroundPreflight(chrome: chrome,
-                                                       controlledWindowID: controlledWindowID)
+                                                       controlledWindowID: canary.windowID,
+                                                       expectedActiveTabID: canary.canaryTabID)
         guard beforeRoutingCapture.isReady,
               let frontmost = beforeRoutingCapture.selectedApplication else {
             reportPreflightFailure(beforeRoutingCapture, chrome: chrome,
-                                   controlledWindowID: controlledWindowID,
-                                   raiseOutcome: raiseOutcome,
+                                   controlledWindowID: canary.windowID,
                                    skippedCapture: "routing capture skipped")
             return
         }
@@ -204,14 +193,264 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
     }
 
-    private func createNormalWindow() throws -> Int {
-        try scriptInteger("""
+    private func frontWindowState(chrome: NSRunningApplication) -> ControlledWindowState? {
+        guard isOriginalChromeProcessRunning(chrome) else {
+            return nil
+        }
+        guard let result = try? runScript("""
         tell application id "com.google.Chrome"
-            activate
-            set controlledWindow to make new window with properties {mode:"normal"}
-            return id of controlledWindow as text
+            set controlledWindow to front window
+            return ((id of front window) as text) & "|" & (mode of controlledWindow) & "|" & ((id of active tab of controlledWindow) as text) & "|" & ((active tab index of controlledWindow) as text)
+        end tell
+        """) else { return nil }
+        return parseWindowState(result)
+    }
+
+    private func windowState(id: Int, chrome: NSRunningApplication) -> ControlledWindowState? {
+        guard isOriginalChromeProcessRunning(chrome) else {
+            return nil
+        }
+        guard let result = try? runScript("""
+        tell application id "com.google.Chrome"
+            set controlledWindow to window id \(id)
+            return ((id of front window) as text) & "|" & (mode of controlledWindow) & "|" & ((id of active tab of controlledWindow) as text) & "|" & ((active tab index of controlledWindow) as text)
+        end tell
+        """) else { return nil }
+        return parseWindowState(result)
+    }
+
+    private func parseWindowState(_ value: String) -> ControlledWindowState? {
+        let fields = value.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 4,
+              let frontWindowID = Int(fields[0]),
+              ["normal", "incognito"].contains(fields[1]),
+              isSafeTabIdentifier(fields[2]),
+              let activeTabIndex = Int(fields[3]), activeTabIndex > 0 else { return nil }
+        return ControlledWindowState(frontWindowID: frontWindowID,
+                                     mode: fields[1],
+                                     activeTabID: fields[2],
+                                     activeTabIndex: activeTabIndex)
+    }
+
+    private func createControlledCanaryTab(chrome: NSRunningApplication,
+                                           windowID: Int,
+                                           previousActiveTabID: String,
+                                           previousActiveTabIndex: Int,
+                                           url: String) throws -> String? {
+        guard isOriginalChromeProcessRunning(chrome),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == chrome.processIdentifier,
+              topmostOrdinaryWindowPID() == chrome.processIdentifier,
+              isSafeTabIdentifier(previousActiveTabID), previousActiveTabIndex > 0 else {
+            return nil
+        }
+        let result = try runScript("""
+        tell application id "com.google.Chrome"
+            set controlledWindow to window id \(windowID)
+            if ((id of front window) as text) is not "\(windowID)" then return "front-changed"
+            if (mode of controlledWindow) is not "normal" then return "not-normal"
+            if ((id of active tab of controlledWindow) as text) is not "\(previousActiveTabID)" then return "owner-changed"
+            if ((active tab index of controlledWindow) as integer) is not \(previousActiveTabIndex) then return "owner-changed"
+            set controlledTab to make new tab at end of tabs of controlledWindow
+            set validatedTabID to ""
+            try
+                set controlledTabID to (id of controlledTab) as text
+                set checkedTabID to controlledTabID as integer
+                set validatedTabID to checkedTabID as text
+                set URL of controlledTab to "\(url)"
+                set active tab index of controlledWindow to (count of tabs of controlledWindow)
+                return "created|" & (checkedTabID as text)
+            on error errorMessage number errorNumber
+                try
+                    close controlledTab
+                    return "setup-failed|" & (errorNumber as text)
+                on error closeMessage number closeErrorNumber
+                    return "cleanup-failed|" & (errorNumber as text) & "|" & (closeErrorNumber as text) & "|" & validatedTabID
+                end try
+            end try
         end tell
         """)
+        let fields = result.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        if fields.first == "front-changed" || fields.first == "not-normal" || fields.first == "owner-changed" {
+            return nil
+        }
+        if fields.first == "setup-failed" {
+            let number = fields.count > 1 ? Int(fields[1]) : nil
+            throw RuntimeProbeError.script(number: number)
+        }
+        if fields.first == "cleanup-failed" {
+            let setupNumber = fields.count > 1 ? Int(fields[1]) : nil
+            let cleanupNumber = fields.count > 2 ? Int(fields[2]) : nil
+            guard fields.count == 4, isSafeTabIdentifier(fields[3]) else {
+                throw RuntimeProbeError.cleanup(number: cleanupNumber ?? setupNumber)
+            }
+            let cleanup = closeCanaryTab(windowID: windowID, tabID: fields[3], chrome: chrome)
+            guard cleanup.closed else {
+                throw RuntimeProbeError.cleanup(number: cleanup.errorNumber ?? cleanupNumber ?? setupNumber)
+            }
+            throw RuntimeProbeError.script(number: setupNumber)
+        }
+        guard fields.count == 2, fields[0] == "created", isSafeTabIdentifier(fields[1]) else {
+            throw RuntimeProbeError.script(number: nil)
+        }
+        return fields[1]
+    }
+
+    private func isSafeTabIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.allSatisfy { $0 >= 48 && $0 <= 57 }
+    }
+
+    private static func shouldRestorePreviousSelection(originalProcessMatches: Bool,
+                                                        exactWindowExists: Bool,
+                                                        normalMode: Bool,
+                                                        canaryTabID: String,
+                                                        currentActiveTabID: String?,
+                                                        previousTabID: String,
+                                                        tabAtSavedIndex: String?) -> Bool {
+        originalProcessMatches
+            && exactWindowExists
+            && normalMode
+            && currentActiveTabID == canaryTabID
+            && tabAtSavedIndex == previousTabID
+    }
+
+    func testCanaryCleanupRestoresOnlyWhenOwnerSelectionIsUnchanged() {
+        XCTAssertTrue(Self.shouldRestorePreviousSelection(originalProcessMatches: true,
+                                                           exactWindowExists: true,
+                                                           normalMode: true,
+                                                           canaryTabID: "30",
+                                                           currentActiveTabID: "30",
+                                                           previousTabID: "12",
+                                                           tabAtSavedIndex: "12"),
+                      "Restore the original selection in the same normal window even when Chrome is in the background")
+        XCTAssertFalse(Self.shouldRestorePreviousSelection(originalProcessMatches: false,
+                                                            exactWindowExists: true,
+                                                            normalMode: true,
+                                                            canaryTabID: "30",
+                                                            currentActiveTabID: "30",
+                                                            previousTabID: "12",
+                                                            tabAtSavedIndex: "12"),
+                       "Do not act on a replacement Chrome process with reused window or tab IDs")
+        XCTAssertFalse(Self.shouldRestorePreviousSelection(originalProcessMatches: true,
+                                                            exactWindowExists: true,
+                                                            normalMode: true,
+                                                            canaryTabID: "30",
+                                                            currentActiveTabID: "44",
+                                                            previousTabID: "12",
+                                                            tabAtSavedIndex: "12"),
+                       "Do not override a selection the owner changed")
+        XCTAssertFalse(Self.shouldRestorePreviousSelection(originalProcessMatches: true,
+                                                            exactWindowExists: true,
+                                                            normalMode: true,
+                                                            canaryTabID: "30",
+                                                            currentActiveTabID: "30",
+                                                            previousTabID: "12",
+                                                            tabAtSavedIndex: "44"),
+                       "Do not select a different tab after the owner reordered tabs")
+    }
+
+    private func readTabID(windowID: Int, index: Int, chrome: NSRunningApplication) -> String? {
+        guard isOriginalChromeProcessRunning(chrome),
+              index > 0 else { return nil }
+        guard let id = try? runScript("""
+        tell application id "com.google.Chrome"
+            set controlledWindow to window id \(windowID)
+            return (id of tab \(index) of controlledWindow) as text
+        end tell
+        """), isSafeTabIdentifier(id) else { return nil }
+        return id
+    }
+
+    private func restorePriorSelection(_ canary: ControlledCanaryTab,
+                                       chrome: NSRunningApplication) -> (restored: Bool, errorNumber: Int?) {
+        guard isOriginalChromeProcessRunning(chrome) else {
+            return (false, nil)
+        }
+        do {
+            let result = try runScript("""
+        tell application id "com.google.Chrome"
+            set controlledWindow to window id \(canary.windowID)
+            if (mode of controlledWindow) is not "normal" then return "not-normal"
+            if ((id of active tab of controlledWindow) as text) is not "\(canary.canaryTabID)" then return "owner-changed"
+            if ((id of tab \(canary.previousActiveTabIndex) of controlledWindow) as text) is not "\(canary.previousActiveTabID)" then return "tab-order-changed"
+            set active tab index of controlledWindow to \(canary.previousActiveTabIndex)
+            if ((id of active tab of controlledWindow) as text) is "\(canary.previousActiveTabID)" then return "restored"
+            return "restore-failed"
+        end tell
+        """)
+            return (result == "restored", nil)
+        } catch let error as RuntimeProbeError {
+            return (false, error.number)
+        } catch {
+            return (false, nil)
+        }
+    }
+
+    private func closeCanaryTab(_ canary: ControlledCanaryTab,
+                                chrome: NSRunningApplication) -> (closed: Bool, errorNumber: Int?) {
+        closeCanaryTab(windowID: canary.windowID, tabID: canary.canaryTabID, chrome: chrome)
+    }
+
+    private func closeCanaryTab(windowID: Int,
+                                tabID: String,
+                                chrome: NSRunningApplication) -> (closed: Bool, errorNumber: Int?) {
+        guard isOriginalChromeProcessRunning(chrome), isSafeTabIdentifier(tabID) else {
+            return (false, nil)
+        }
+        do {
+            let result = try runScript("""
+        tell application id "com.google.Chrome"
+            close tab id "\(tabID)" of window id \(windowID)
+            return "closed"
+        end tell
+        """)
+            return (result == "closed", nil)
+        } catch let error as RuntimeProbeError {
+            return (false, error.number)
+        } catch {
+            return (false, nil)
+        }
+    }
+
+    private func cleanupCanaryTab(_ canary: ControlledCanaryTab,
+                                  chrome: NSRunningApplication) {
+        let state = windowState(id: canary.windowID, chrome: chrome)
+        let processMatches = isOriginalChromeProcessRunning(chrome)
+        let savedIndexMapsToPrevious = readTabID(windowID: canary.windowID,
+                                                 index: canary.previousActiveTabIndex,
+                                                 chrome: chrome)
+            == canary.previousActiveTabID
+        let restoreSelection = Self.shouldRestorePreviousSelection(
+            originalProcessMatches: processMatches,
+            exactWindowExists: state != nil,
+            normalMode: state?.mode == "normal",
+            canaryTabID: canary.canaryTabID,
+            currentActiveTabID: state?.activeTabID,
+            previousTabID: canary.previousActiveTabID,
+            tabAtSavedIndex: savedIndexMapsToPrevious ? canary.previousActiveTabID : nil)
+        let restoreResult = restoreSelection
+            ? restorePriorSelection(canary, chrome: chrome)
+            : (restored: false, errorNumber: Optional<Int>.none)
+        let closed = closeCanaryTab(canary, chrome: chrome)
+        XCTAssertTrue(closed.closed,
+                      "Could not close only the controlled canary tab; AppleScriptErrorNumber=\(closed.errorNumber.map(String.init) ?? "unavailable")")
+        if restoreSelection {
+            XCTAssertTrue(restoreResult.restored,
+                          "Prior selection could not be safely restored; AppleScriptErrorNumber=\(restoreResult.errorNumber.map(String.init) ?? "unavailable")")
+            if restoreResult.restored {
+                XCTAssertEqual(windowState(id: canary.windowID, chrome: chrome)?.activeTabID,
+                               canary.previousActiveTabID,
+                               "Prior active tab ID did not remain selected after canary cleanup")
+            }
+        }
+    }
+
+    private func isOriginalChromeProcessRunning(_ chrome: NSRunningApplication) -> Bool {
+        guard !chrome.isTerminated,
+              BrowserProcess.permitsUnboundAction(bundleID: BrowserKind.chrome.bundleIdentifier),
+              let current = try? BrowserProcess.application(bundleID: BrowserKind.chrome.bundleIdentifier) else {
+            return false
+        }
+        return current.processIdentifier == chrome.processIdentifier
     }
 
     private func waitForForegroundPreflight(
@@ -236,27 +475,28 @@ final class PrivateWindowRuntimeTests: XCTestCase {
 
     private func foregroundPreflight(
         chrome: NSRunningApplication,
-        controlledWindowID: Int
+        controlledWindowID: Int,
+        expectedActiveTabID: String
     ) -> ForegroundPreflight {
         let selectedApplication = NSWorkspace.shared.frontmostApplication
         let topWindowPID = topmostOrdinaryWindowPID()
-        let frontWindowID = try? scriptInteger(
-            "tell application id \"com.google.Chrome\" to get id of front window")
+        let state = windowState(id: controlledWindowID, chrome: chrome)
         return ForegroundPreflight(
             selectedApplication: selectedApplication,
             selectedPIDMatches: selectedApplication?.processIdentifier == chrome.processIdentifier
                 && selectedApplication?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
             topWindowPIDMatches: topWindowPID == chrome.processIdentifier,
-            frontWindowMatches: frontWindowID == controlledWindowID,
+            frontWindowMatches: state?.frontWindowID == controlledWindowID,
+            windowModeMatches: state?.mode == "normal",
+            activeTabMatches: state?.activeTabID == expectedActiveTabID,
             observedTopWindowPID: topWindowPID,
-            observedFrontWindowID: frontWindowID
+            observedFrontWindowID: state?.frontWindowID
         )
     }
 
     private func reportPreflightFailure(_ preflight: ForegroundPreflight,
                                         chrome: NSRunningApplication,
                                         controlledWindowID: Int,
-                                        raiseOutcome: ChromeWindowRaiseOutcome,
                                         skippedCapture: String) {
         let failures = preflight.failedPredicates.joined(separator: ",")
         let selectedPID = preflight.selectedApplication.map {
@@ -269,7 +509,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             String(describing: $0)
         } ?? "none"
         XCTFail(
-            "Native foreground preflight failed checks: \(failures); raiseOutcome=\(raiseOutcome.diagnosticValue); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedFrontWindowID=\(frontWindowID); \(skippedCapture)"
+            "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedFrontWindowID=\(frontWindowID); \(skippedCapture)"
         )
     }
 
@@ -303,55 +543,6 @@ final class PrivateWindowRuntimeTests: XCTestCase {
 
         XCTAssertEqual(result.failedPredicates, ["topmostOrdinaryWindowPID"])
         XCTAssertEqual(sampleCount, 2)
-    }
-
-    private func prepareWindow(_ id: Int, url: String) throws -> Bool {
-        let result = try runScript("""
-        tell application id "com.google.Chrome"
-            set controlledWindow to window id \(id)
-            set URL of active tab of controlledWindow to "\(url)"
-            set controlledTabCount to count of tabs of controlledWindow
-            set controlledMode to mode of controlledWindow
-            return (controlledTabCount as text) & ":" & controlledMode
-        end tell
-        """)
-        return result == "1:normal"
-    }
-
-    private func closeWindow(_ id: Int) throws -> Bool {
-        try runScript("""
-        tell application id "com.google.Chrome"
-            close window id \(id)
-            return "closed"
-        end tell
-        """) == "closed"
-    }
-
-    private func activateChromeWindow(_ id: Int) throws -> Bool {
-        try runScript("""
-        tell application id "com.google.Chrome"
-            activate
-            set index of window id \(id) to 1
-            return (id of front window) as text
-        end tell
-        """) == String(id)
-    }
-
-    private enum ChromeWindowRaiseOutcome {
-        case returnedTrue
-        case returnedFalse
-        case threw(errorNumber: Int?)
-
-        var diagnosticValue: String {
-            switch self {
-            case .returnedTrue:
-                return "returned-true"
-            case .returnedFalse:
-                return "returned-false"
-            case let .threw(errorNumber):
-                return "threw; AppleScriptErrorNumber=\(errorNumber.map(String.init) ?? "unavailable")"
-            }
-        }
     }
 
     private func scriptInteger(_ source: String) throws -> Int {
@@ -398,10 +589,17 @@ final class PrivateWindowRuntimeTests: XCTestCase {
 
     private enum RuntimeProbeError: Error {
         case script(number: Int?)
+        case cleanup(number: Int?)
 
         var number: Int? {
-            guard case let .script(number) = self else { return nil }
-            return number
+            switch self {
+            case let .script(number), let .cleanup(number): return number
+            }
+        }
+
+        var cleanupFailed: Bool {
+            if case .cleanup = self { return true }
+            return false
         }
     }
 
