@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SaaSMakerUI
 import BrowserCore
@@ -26,6 +27,9 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(BrowserTheme.fog)
         .onAppear { model.refreshPermissions() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshPermissions()
+        }
     }
 
     private var header: some View {
@@ -67,10 +71,13 @@ struct OnboardingView: View {
             row(
                 ok: model.automation[BrowserKind.chrome.displayName] == .granted,
                 title: "Browser automation",
-                body: "Open Chrome, then allow tab access explicitly. Capture verifies "
+                body: model.automation[BrowserKind.chrome.displayName] == .ambiguous
+                    ? "Multiple Chrome instances are running. Quit extra instances, then return here."
+                    : "Open Chrome, then allow tab access explicitly. Capture verifies "
                       + "a normal window before reading URLs; without access, only "
                       + "app-level time is recorded.",
-                actionTitle: model.automation[BrowserKind.chrome.displayName] == .granted
+                actionTitle: [Permissions.AutomationState.granted, .ambiguous]
+                    .contains(model.automation[BrowserKind.chrome.displayName] ?? .unknown)
                     ? nil : model.automation[BrowserKind.chrome.displayName] == .denied
                     ? "Open Settings" : "Allow Chrome",
                 action: {

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import BrowserCore
 
@@ -17,6 +18,10 @@ struct PermissionsView: View {
             .padding(28)
             .frame(maxWidth: 900)
             .frame(maxWidth: .infinity)
+        }
+        .onAppear { model.refreshPermissions() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshPermissions()
         }
     }
 
@@ -89,7 +94,8 @@ struct PermissionsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                         if name == BrowserKind.chrome.displayName,
                            model.automation[name] != .granted,
-                           model.automation[name] != .denied {
+                           model.automation[name] != .denied,
+                           model.automation[name] != .ambiguous {
                             Button("Allow") { model.requestTabConsent(.chrome) }
                                 .textCase(.lowercase)
                                 .disabled(model.automation[name] == .notRunning)
@@ -218,6 +224,7 @@ struct PermissionsView: View {
         case .granted: "granted"
         case .denied: "denied — enable in Settings"
         case .notRunning: "browser not running"
+        case .ambiguous: "multiple instances — quit extras, then re-check"
         default: "not granted or unavailable"
         }
     }

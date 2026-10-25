@@ -4,7 +4,7 @@ import Foundation
 /// Honest permission state — probe reality, don't assume.
 public enum Permissions {
     public enum AutomationState: Sendable, Equatable {
-        case granted, denied, notRunning, unknown
+        case granted, denied, notRunning, ambiguous, unknown
     }
 
     /// Per-browser Automation consent. Asks the AE permission API rather
@@ -17,6 +17,7 @@ public enum Permissions {
         let running: NSRunningApplication
         do { running = try BrowserProcess.application(bundleID: bundleID) }
         catch BrowserProcess.Failure.notRunning { return .notRunning }
+        catch BrowserProcess.Failure.ambiguous { return .ambiguous }
         catch { return .unknown }
         let address = NSAppleEventDescriptor(processIdentifier: running.processIdentifier)
         let status = ChromiumCapture.permission(address: address, prompt: false)
