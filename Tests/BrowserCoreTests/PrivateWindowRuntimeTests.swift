@@ -17,6 +17,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let activeTabMatches: Bool
         let observedTopWindowPID: pid_t?
         let observedCaptureWindowID: Int?
+        let captureTarget: ChromiumCapture.ActiveTabMetadata?
 
         init(selectedApplication: NSRunningApplication?,
              selectedPIDMatches: Bool,
@@ -25,7 +26,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
              windowModeMatches: Bool = true,
              activeTabMatches: Bool = true,
              observedTopWindowPID: pid_t? = nil,
-             observedCaptureWindowID: Int? = nil) {
+             observedCaptureWindowID: Int? = nil,
+             captureTarget: ChromiumCapture.ActiveTabMetadata? = nil) {
             self.selectedApplication = selectedApplication
             self.selectedPIDMatches = selectedPIDMatches
             self.topWindowPIDMatches = topWindowPIDMatches
@@ -34,6 +36,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             self.activeTabMatches = activeTabMatches
             self.observedTopWindowPID = observedTopWindowPID
             self.observedCaptureWindowID = observedCaptureWindowID
+            self.captureTarget = captureTarget
         }
 
         var failedPredicates: [String] {
@@ -151,7 +154,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                     XCTFail("External capture metadata gate failed; focus capture skipped")
                     return
                 }
-                let captured = FocusWatcher.browserTab(beforeFocus.application)
+                let target = Self.captureTarget(beforeFocus.gate)
+                let captured = FocusWatcher.browserTab(beforeFocus.application, matching: target)
                 guard captured.0 == Self.externalCanaryURL else {
                     XCTFail("Focused capture did not match the fixed external canary; values omitted")
                     return
@@ -165,7 +169,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                     XCTFail("External routing metadata gate failed; routing capture skipped")
                     return
                 }
-                switch FrontmostTab.capture(frontmost: beforeRouting.application) {
+                switch FrontmostTab.capture(frontmost: beforeRouting.application,
+                                            matching: Self.captureTarget(beforeRouting.gate)) {
                 case let .url(browser, value):
                     XCTAssertTrue(browser == .chrome && value == Self.externalCanaryURL,
                                   "Routing capture did not match the fixed external canary; values omitted")
@@ -201,6 +206,11 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             && gate.topWindowPID == expectedPID
             && gate.firstWindowID == expectedWindowID
             && gate.activeTabID == expectedTabID
+    }
+
+    private static func captureTarget(_ gate: ExternalMetadataGate) -> ChromiumCapture.ActiveTabMetadata {
+        ChromiumCapture.ActiveTabMetadata(windowID: String(gate.firstWindowID), mode: gate.mode,
+                                          activeTabID: String(gate.activeTabID))
     }
 
     private static func positiveInteger(_ value: String?) -> Int? {
@@ -434,14 +444,15 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let beforeFocusCapture = foregroundPreflight(chrome: chrome,
                                                     controlledWindowID: canary.windowID,
                                                     expectedActiveTabID: canary.canaryTabID)
-        guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
+        guard beforeFocusCapture.isReady,
+              let captureTarget = beforeFocusCapture.captureTarget else {
             reportPreflightFailure(beforeFocusCapture, chrome: chrome,
                                    controlledWindowID: canary.windowID,
                                    skippedCapture: "capture skipped; no tab content read")
             return
         }
-        print("BrowserDaddy controlled normal tab canary gates: nativePID=true, topWindowPID=true, frontWindow=true, normalMode=true, canaryActive=true")
-        let captured = FocusWatcher.browserTab(chrome)
+        print("BrowserDaddy controlled normal tab canary gates: nativePID=true, topWindowPID=true, captureWindow=true, normalMode=true, canaryActive=true")
+        let captured = FocusWatcher.browserTab(chrome, matching: captureTarget)
         guard captured.0 == url else {
             XCTFail("Focused capture did not match the controlled canary; routing capture skipped; values omitted")
             return
@@ -451,13 +462,14 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                                        controlledWindowID: canary.windowID,
                                                        expectedActiveTabID: canary.canaryTabID)
         guard beforeRoutingCapture.isReady,
-              let frontmost = beforeRoutingCapture.selectedApplication else {
+              let frontmost = beforeRoutingCapture.selectedApplication,
+              let captureTarget = beforeRoutingCapture.captureTarget else {
             reportPreflightFailure(beforeRoutingCapture, chrome: chrome,
                                    controlledWindowID: canary.windowID,
                                    skippedCapture: "routing capture skipped")
             return
         }
-        let routed = FrontmostTab.capture(frontmost: frontmost)
+        let routed = FrontmostTab.capture(frontmost: frontmost, matching: captureTarget)
         switch routed {
         case let .url(browser, value):
             XCTAssertTrue(browser == .chrome && value == url,
@@ -893,7 +905,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             windowModeMatches: metadata?.mode == "normal",
             activeTabMatches: metadata?.activeTabID == expectedActiveTabID,
             observedTopWindowPID: topWindowPID,
-            observedCaptureWindowID: metadata.flatMap { Int($0.windowID) }
+            observedCaptureWindowID: metadata.flatMap { Int($0.windowID) },
+            captureTarget: metadata
         )
     }
 

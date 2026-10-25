@@ -117,6 +117,44 @@ final class ChromiumCaptureTests: XCTestCase {
         XCTAssertFalse(fixture.properties.contains("pnam"))
     }
 
+    func testWindowOrderChangeBetweenPreflightAndCaptureRefusesBeforeContentReads() throws {
+        let fixture = Fixture([
+            ids(["approved-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "approved-tab"),
+            ids(["new-front-window", "approved-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "other-tab"),
+            NSAppleEventDescriptor(string: "https://wrong.example/"), NSAppleEventDescriptor(string: "Wrong"),
+        ])
+        let reader = try capture(fixture)
+        let approved = try XCTUnwrap(reader.activeTabMetadata())
+
+        XCTAssertThrowsError(try reader.activeTab(matching: approved))
+        XCTAssertEqual(fixture.properties, ["ID  ", "mode", "ID  ", "ID  ", "mode", "ID  "])
+        XCTAssertFalse(fixture.properties.contains("URL "))
+        XCTAssertFalse(fixture.properties.contains("pnam"))
+    }
+
+    func testIdentityBoundCaptureReadsContentFromApprovedPinnedTarget() throws {
+        let fixture = Fixture([
+            ids(["approved-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "approved-tab"),
+            ids(["approved-window", "other-window"]), NSAppleEventDescriptor(string: "normal"),
+            NSAppleEventDescriptor(string: "approved-tab"),
+            NSAppleEventDescriptor(string: "https://fixture.example/"), NSAppleEventDescriptor(string: "Fixture"),
+        ])
+        let reader = try capture(fixture)
+        let approved = try XCTUnwrap(reader.activeTabMetadata())
+
+        let value = try reader.activeTab(matching: approved)
+
+        XCTAssertEqual(value?.url, "https://fixture.example/")
+        XCTAssertEqual(value?.title, "Fixture")
+        XCTAssertEqual(fixture.properties, ["ID  ", "mode", "ID  ", "ID  ", "mode", "ID  ", "URL ", "pnam"])
+        let contentTab = try XCTUnwrap(fixture.specifiers.suffix(2).first?.forKeyword(AEKeyword(keyAEContainer)))
+        let contentWindow = try XCTUnwrap(contentTab.forKeyword(AEKeyword(keyAEContainer)))
+        assertUnique(contentWindow, type: "cwin", id: "approved-window")
+    }
+
     func testPrivateActiveTabMetadataDoesNotReadTabIdentityOrContent() throws {
         let fixture = Fixture([ids(["private-window", "normal-window"]),
             NSAppleEventDescriptor(string: "incognito")])

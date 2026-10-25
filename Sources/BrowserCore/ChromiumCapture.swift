@@ -128,10 +128,18 @@ struct ChromiumCapture {
         guard let target = try activeTabTarget(),
               target.metadata.mode == "normal",
               let tabID = target.tabID else { return nil }
-        let tab = try Self.object("CrTb", form: formUniqueID, key: tabID,
-                                  container: target.window)
-        let content = try content(of: tab)
-        return content.url.isEmpty ? nil : content
+        return try activeTabContent(target, tabID: tabID)
+    }
+
+    /// Captures content only when the exact window and tab preflighted by the
+    /// caller remain the current capture target. The target is re-resolved once
+    /// and that same pinned window/tab specifier is used for URL/title reads.
+    func activeTab(matching expected: ActiveTabMetadata) throws -> (url: String, title: String)? {
+        guard let target = try activeTabTarget(),
+              target.metadata == expected,
+              target.metadata.mode == "normal",
+              let tabID = target.tabID else { throw Failure.unavailable }
+        return try activeTabContent(target, tabID: tabID)
     }
 
     func inventory(browser: BrowserKind) throws -> [BrowserTab] {
@@ -197,6 +205,14 @@ struct ChromiumCapture {
                                         activeTabID: activeTabID),
             window: container,
             tabID: tabID)
+    }
+
+    private func activeTabContent(_ target: ActiveTabTarget,
+                                  tabID: NSAppleEventDescriptor) throws -> (url: String, title: String)? {
+        let tab = try Self.object("CrTb", form: formUniqueID, key: tabID,
+                                  container: target.window)
+        let content = try content(of: tab)
+        return content.url.isEmpty ? nil : content
     }
 
     private func mode(of window: NSAppleEventDescriptor) throws -> String {

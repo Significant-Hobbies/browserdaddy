@@ -155,4 +155,13 @@ public final class FocusWatcher: @unchecked Sendable {
               let tab = try? capture.activeTab() else { return ("", "") }
         return (tab.url, tab.title)
     }
+
+    /// Runtime qualification binds its content read to the metadata target it
+    /// just approved, closing the gap between preflight and capture.
+    static func browserTab(_ application: NSRunningApplication,
+                           matching target: ChromiumCapture.ActiveTabMetadata) -> (String, String) {
+        guard let capture = try? ChromiumCapture(application: application),
+              let tab = try? capture.activeTab(matching: target) else { return ("", "") }
+        return (tab.url, tab.title)
+    }
 }
