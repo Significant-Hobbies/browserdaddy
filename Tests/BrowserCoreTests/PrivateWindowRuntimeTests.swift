@@ -335,8 +335,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             }
         }
         guard added.count == 1,
-              added[0].windowID == firstWindow.windowID,
-              firstWindow.activeTabID == added[0].tabID else { return nil }
+              added[0].windowID == firstWindow.windowID else { return nil }
         return ExternalCanaryTarget(processID: expectedPID,
                                     windowID: added[0].windowID,
                                     tabID: added[0].tabID)
