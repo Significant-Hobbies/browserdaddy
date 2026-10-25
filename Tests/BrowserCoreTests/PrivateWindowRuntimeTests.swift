@@ -1074,9 +1074,9 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                 ]), // private mode changed and its IDs are not inspected
             ExternalTabSnapshot(processID: 1360, selectedPID: 1360, topWindowPID: 1360,
                                 windows: [
-                                    after.windows[0],
-                                    ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5, 99], activeTabID: 99),
-                                    after.windows[2],
+                                    before.windows[0],
+                                    ExternalWindowSnapshot(windowID: 20, mode: "normal", tabIDs: [3, 5, 98], activeTabID: 98),
+                                    before.windows[2],
                                 ]), // only new tab is owned by a non-first window
             ExternalTabSnapshot(processID: 1360, selectedPID: 1360, topWindowPID: 1360,
                                 windows: [after.windows[0], after.windows[1]]), // window set changed
