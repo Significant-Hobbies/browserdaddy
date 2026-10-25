@@ -8,6 +8,23 @@ import XCTest
 /// and recovery modes retain the operator-supplied window flow.
 @MainActor
 final class PrivateWindowRuntimeTests: XCTestCase {
+    private struct ForegroundPreflight {
+        let selectedApplication: NSRunningApplication?
+        let selectedPIDMatches: Bool
+        let topWindowPIDMatches: Bool
+        let frontWindowMatches: Bool
+
+        var failedPredicates: [String] {
+            var failures: [String] = []
+            if !selectedPIDMatches { failures.append("selectedApplicationPID") }
+            if !topWindowPIDMatches { failures.append("topmostOrdinaryWindowPID") }
+            if !frontWindowMatches { failures.append("controlledChromeFrontWindowID") }
+            return failures
+        }
+
+        var isReady: Bool { failedPredicates.isEmpty }
+    }
+
     func testChromeWindowPrivacyAtTheActualCaptureBoundaries() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let mode = environment["BROWSERDADDY_PRIVACY_MODE"] else {
@@ -95,17 +112,6 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             return
         }
 
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        let selectedPIDMatches = frontmost?.processIdentifier == chrome.processIdentifier
-            && frontmost?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier
-        let topWindowPIDMatches = topmostOrdinaryWindowPID() == chrome.processIdentifier
-        let frontWindowMatches = (try? scriptInteger(
-            "tell application id \"com.google.Chrome\" to get id of front window")) == controlledWindowID
-        guard selectedPIDMatches, topWindowPIDMatches, frontWindowMatches else {
-            XCTFail("Native foreground PID/front-window preflight failed; capture skipped; no tab content read")
-            return
-        }
-
         do {
             let capture = try ChromiumCapture(application: chrome)
             guard try capture.frontWindowMode() == "normal" else {
@@ -117,10 +123,38 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             return
         }
 
+        let converged = waitForForegroundPreflight {
+            foregroundPreflight(chrome: chrome, controlledWindowID: controlledWindowID)
+        }
+        guard converged.isReady, converged.selectedApplication != nil else {
+            reportPreflightFailure(converged, skippedCapture: "capture skipped; no tab content read")
+            return
+        }
+
+        // The disposable canary is assumed idle during this bounded check. OS
+        // window metadata and subsequent browser AppleEvents cannot be sampled
+        // atomically, so this normal-stage probe is not a complete privacy proof.
+        let beforeFocusCapture = foregroundPreflight(chrome: chrome,
+                                                    controlledWindowID: controlledWindowID)
+        guard beforeFocusCapture.isReady, beforeFocusCapture.selectedApplication != nil else {
+            reportPreflightFailure(beforeFocusCapture, skippedCapture: "capture skipped; no tab content read")
+            return
+        }
         print("BrowserDaddy controlled normal canary gates: nativePID=true, topWindowPID=true, frontWindow=true, oneTab=true")
         let captured = FocusWatcher.browserTab(chrome)
+        guard captured.0 == url else {
+            XCTFail("Focused capture did not match the controlled canary; routing capture skipped; values omitted")
+            return
+        }
+
+        let beforeRoutingCapture = foregroundPreflight(chrome: chrome,
+                                                       controlledWindowID: controlledWindowID)
+        guard beforeRoutingCapture.isReady,
+              let frontmost = beforeRoutingCapture.selectedApplication else {
+            reportPreflightFailure(beforeRoutingCapture, skippedCapture: "routing capture skipped")
+            return
+        }
         let routed = FrontmostTab.capture(frontmost: frontmost)
-        XCTAssertTrue(captured.0 == url, "Focused capture did not match the controlled canary; values omitted")
         switch routed {
         case let .url(browser, value):
             XCTAssertTrue(browser == .chrome && value == url,
@@ -140,6 +174,81 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         """)
     }
 
+    private func waitForForegroundPreflight(
+        maxSamples: Int = 10,
+        pollInterval: TimeInterval = 0.1,
+        sample: () -> ForegroundPreflight,
+        pause: (TimeInterval) -> Void = {
+            RunLoop.current.run(until: Date().addingTimeInterval($0))
+        }
+    ) -> ForegroundPreflight {
+        precondition(maxSamples > 0)
+        var latest = sample()
+        guard !latest.isReady else { return latest }
+
+        for _ in 1..<maxSamples {
+            pause(pollInterval)
+            latest = sample()
+            if latest.isReady { return latest }
+        }
+        return latest
+    }
+
+    private func foregroundPreflight(
+        chrome: NSRunningApplication,
+        controlledWindowID: Int
+    ) -> ForegroundPreflight {
+        let selectedApplication = NSWorkspace.shared.frontmostApplication
+        return ForegroundPreflight(
+            selectedApplication: selectedApplication,
+            selectedPIDMatches: selectedApplication?.processIdentifier == chrome.processIdentifier
+                && selectedApplication?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
+            topWindowPIDMatches: topmostOrdinaryWindowPID() == chrome.processIdentifier,
+            frontWindowMatches: (try? scriptInteger(
+                "tell application id \"com.google.Chrome\" to get id of front window")) == controlledWindowID
+        )
+    }
+
+    private func reportPreflightFailure(_ preflight: ForegroundPreflight,
+                                        skippedCapture: String) {
+        let failures = preflight.failedPredicates.joined(separator: ",")
+        XCTFail(
+            "Native foreground preflight did not converge; failed metadata checks: \(failures); \(skippedCapture)"
+        )
+    }
+
+    func testForegroundPreflightWaitsForMetadataConvergence() {
+        let samples = [
+            ForegroundPreflight(selectedApplication: nil, selectedPIDMatches: false,
+                                topWindowPIDMatches: false, frontWindowMatches: true),
+            ForegroundPreflight(selectedApplication: nil, selectedPIDMatches: true,
+                                topWindowPIDMatches: true, frontWindowMatches: true),
+        ]
+        var sampleIndex = 0
+        var pauses = 0
+
+        let result = waitForForegroundPreflight(maxSamples: 3, sample: {
+            defer { sampleIndex += 1 }
+            return samples[sampleIndex]
+        }, pause: { _ in pauses += 1 })
+
+        XCTAssertTrue(result.isReady)
+        XCTAssertEqual(sampleIndex, 2)
+        XCTAssertEqual(pauses, 1)
+    }
+
+    func testForegroundPreflightReportsOnlyUnsatisfiedMetadataPredicates() {
+        var sampleCount = 0
+        let result = waitForForegroundPreflight(maxSamples: 2, sample: {
+            sampleCount += 1
+            return ForegroundPreflight(selectedApplication: nil, selectedPIDMatches: true,
+                                       topWindowPIDMatches: false, frontWindowMatches: true)
+        }, pause: { _ in })
+
+        XCTAssertEqual(result.failedPredicates, ["topmostOrdinaryWindowPID"])
+        XCTAssertEqual(sampleCount, 2)
+    }
+
     private func prepareWindow(_ id: Int, url: String) throws -> Bool {
         let result = try runScript("""
         tell application id "com.google.Chrome"
@@ -147,11 +256,10 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             set URL of active tab of controlledWindow to "\(url)"
             set controlledTabCount to count of tabs of controlledWindow
             set controlledMode to mode of controlledWindow
-            set frontWindowID to id of front window
-            return (controlledTabCount as text) & ":" & controlledMode & ":" & (frontWindowID as text)
+            return (controlledTabCount as text) & ":" & controlledMode
         end tell
         """)
-        return result == "1:normal:\(id)"
+        return result == "1:normal"
     }
 
     private func closeWindow(_ id: Int) throws -> Bool {
