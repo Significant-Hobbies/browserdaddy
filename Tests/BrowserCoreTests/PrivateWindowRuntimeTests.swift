@@ -459,8 +459,17 @@ final class PrivateWindowRuntimeTests: XCTestCase {
               before.selectedPID == after.selectedPID,
               before.topWindowPID == after.topWindowPID,
               after.windows.count == before.windows.count + 1 else { return false }
-        let beforeByID = Dictionary(uniqueKeysWithValues: before.windows.map { ($0.windowID, $0) })
-        let afterByID = Dictionary(uniqueKeysWithValues: after.windows.map { ($0.windowID, $0) })
+
+        func uniqueWindowsByID(_ windows: [ExternalWindowSnapshot]) -> [Int: ExternalWindowSnapshot]? {
+            var result: [Int: ExternalWindowSnapshot] = [:]
+            for window in windows {
+                guard result.updateValue(window, forKey: window.windowID) == nil else { return nil }
+            }
+            return result
+        }
+
+        guard let beforeByID = uniqueWindowsByID(before.windows),
+              let afterByID = uniqueWindowsByID(after.windows) else { return false }
         guard Set(beforeByID.keys).isSubset(of: Set(afterByID.keys)) else { return false }
         let addedIDs = Set(afterByID.keys).subtracting(beforeByID.keys)
         guard addedIDs.count == 1,
@@ -559,8 +568,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     }
 
     private static func makeIncognitoWindowEvent(processID: pid_t) -> NSAppleEventDescriptor {
-        let event = NSAppleEventDescriptor(eventClass: AEEventClass(ChromiumCapture.code("core")),
-                                           eventID: AEEventID(ChromiumCapture.code("corecrel")),
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
+                                           eventID: AEEventID(kAECreateElement),
                                            targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
                                            returnID: AEReturnID(kAutoGenerateReturnID),
                                            transactionID: AETransactionID(kAnyTransactionID))
@@ -574,20 +583,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     }
 
     private static func setWindowToFront(processID: pid_t, windowID: String) throws {
-        guard let identifier = Int(windowID), identifier > 0 else {
-            throw RuntimeProbeError.script(number: nil)
-        }
-        let window = try ChromiumCapture.object("cwin", form: formUniqueID,
-                                                key: NSAppleEventDescriptor(string: windowID),
-                                                container: .null())
-        let index = try ChromiumCapture.property("pidx", of: window)
-        let event = NSAppleEventDescriptor(eventClass: AEEventClass(ChromiumCapture.code("core")),
-                                           eventID: AEEventID(ChromiumCapture.code("coresetd")),
-                                           targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
-                                           returnID: AEReturnID(kAutoGenerateReturnID),
-                                           transactionID: AETransactionID(kAnyTransactionID))
-        event.setParam(index, forKeyword: AEKeyword(keyDirectObject))
-        event.setParam(NSAppleEventDescriptor(int32: 1), forKeyword: AEKeyword(keyAEData))
+        let event = try makeSetWindowToFrontEvent(processID: processID, windowID: windowID)
         let reply = try event.sendEvent(options: ChromiumCapture.sendOptions, timeout: 3)
         if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)), error.int32Value != 0 {
             if error.int32Value == errAEEventNotPermitted || error.int32Value == errAEEventWouldRequireUserConsent {
@@ -595,6 +591,25 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             }
             throw RuntimeProbeError.script(number: Int(error.int32Value))
         }
+    }
+
+    private static func makeSetWindowToFrontEvent(processID: pid_t,
+                                                   windowID: String) throws -> NSAppleEventDescriptor {
+        guard let identifier = Int(windowID), identifier > 0 else {
+            throw RuntimeProbeError.script(number: nil)
+        }
+        let window = try ChromiumCapture.object("cwin", form: formUniqueID,
+                                                key: NSAppleEventDescriptor(string: windowID),
+                                                container: .null())
+        let index = try ChromiumCapture.property("pidx", of: window)
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
+                                           eventID: AEEventID(kAESetData),
+                                           targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
+                                           returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(index, forKeyword: AEKeyword(keyDirectObject))
+        event.setParam(NSAppleEventDescriptor(int32: 1), forKeyword: AEKeyword(keyAEData))
+        return event
     }
 
     private func runExternalNormalCanary(phase: String, environment: [String: String]) throws {
@@ -2031,8 +2046,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
     func testIncognitoCreationEventTargetsExactPIDAndSetsOnlyWindowMode() throws {
         let processID = pid_t(829)
         let event = Self.makeIncognitoWindowEvent(processID: processID)
-        XCTAssertEqual(event.eventClass, AEEventClass(ChromiumCapture.code("core")))
-        XCTAssertEqual(event.eventID, AEEventID(ChromiumCapture.code("corecrel")))
+        XCTAssertEqual(event.eventClass, AEEventClass(kAECoreSuite))
+        XCTAssertEqual(event.eventID, AEEventID(kAECreateElement))
         let expectedAddress = NSAppleEventDescriptor(processIdentifier: processID)
         XCTAssertEqual(try XCTUnwrap(event.attributeDescriptor(forKeyword: keyAddressAttr)).data,
                        expectedAddress.data)
@@ -2044,7 +2059,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                        "incognito")
     }
 
-    func testPrivateRecoverySequenceRequiresOnlyOneUnchangedNormalAndOnePrivateWindow() {
+    func testPrivateRecoverySequenceRequiresOneUnchangedNormalAndOnePrivateWindow() throws {
         let normal = ExternalWindowSnapshot(windowID: 42, mode: "normal",
                                             tabIDs: [10, 11], activeTabID: 11)
         let before = ExternalTabSnapshot(processID: 720, selectedPID: 720,
@@ -2074,6 +2089,20 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                       ExternalWindowSnapshot(windowID: 44, mode: "normal",
                                              tabIDs: [20], activeTabID: 20)])
         XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: extraWindow))
+
+        let duplicateWindowIDs = ExternalTabSnapshot(
+            processID: 720, selectedPID: 720, topWindowPID: 720,
+            windows: [normal, normal])
+        XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: duplicateWindowIDs))
+    }
+
+    func testWindowSelectionEventUsesCanonicalCoreSetEvent() throws {
+        let setWindowEvent = try Self.makeSetWindowToFrontEvent(processID: 829, windowID: "42")
+        XCTAssertEqual(setWindowEvent.eventClass, AEEventClass(kAECoreSuite))
+        XCTAssertEqual(setWindowEvent.eventID, AEEventID(kAESetData))
+        XCTAssertNotNil(setWindowEvent.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)))
+        XCTAssertEqual(setWindowEvent.paramDescriptor(forKeyword: AEKeyword(keyAEData))?.int32Value, 1)
+        XCTAssertThrowsError(try Self.makeSetWindowToFrontEvent(processID: 829, windowID: "00"))
     }
 
     func testForegroundPreflightWaitsForMetadataConvergence() {
