@@ -353,9 +353,15 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             XCTFail("Private foreground or window identity changed; no private capture attempted")
             return
         }
+        guard privateCaptureIsRefusedBeforeContent(chrome: chrome, expected: privateMetadata) else {
+            XCTFail("Private capture did not produce a verified metadata-only refusal; values omitted")
+            return
+        }
         let privateCapture = FocusWatcher.browserTab(chrome, matching: privateMetadata)
-        XCTAssertTrue(privateCapture.0.isEmpty && privateCapture.1.isEmpty,
-                      "Private focus must remain app-only; values omitted")
+        guard privateCapture.0.isEmpty && privateCapture.1.isEmpty else {
+            XCTFail("Private focus returned content unexpectedly; values omitted")
+            return
+        }
         print("BrowserDaddy isolated qualification private exclusion passed; private tab fields were not read")
 
         do {
@@ -454,6 +460,61 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         return !chrome.isTerminated
             && NSWorkspace.shared.frontmostApplication?.processIdentifier == chrome.processIdentifier
             && topmostOrdinaryWindowPID() == chrome.processIdentifier
+    }
+
+    private func privateCaptureIsRefusedBeforeContent(
+        chrome: NSRunningApplication,
+        expected: ChromiumCapture.ActiveTabMetadata
+    ) -> Bool {
+        let processID = chrome.processIdentifier
+        let address = NSAppleEventDescriptor(processIdentifier: processID)
+        var properties: [String] = []
+        var sendFailed = false
+        let reader: ChromiumCapture
+        do {
+            reader = try ChromiumCapture(processID: processID, permission: { target in
+                ChromiumCapture.permission(address: target, prompt: false)
+            }, send: { event, options in
+                guard event.eventClass == AEEventClass(kAECoreSuite),
+                      event.eventID == AEEventID(kAEGetData),
+                      event.attributeDescriptor(forKeyword: keyAddressAttr)?.data == address.data,
+                      options.contains(.neverInteract),
+                      options.contains(.waitForReply),
+                      options.rawValue & UInt(kAEDoNotPromptForUserConsent) != 0,
+                      let directObject = event.paramDescriptor(forKeyword: keyDirectObject),
+                      let propertyCode = directObject.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue else {
+                    sendFailed = true
+                    return NSAppleEventDescriptor.null()
+                }
+                properties.append(Self.textCode(propertyCode))
+                do {
+                    let reply = try event.sendEvent(options: options, timeout: 2)
+                    if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)),
+                       error.int32Value != 0 {
+                        sendFailed = true
+                    }
+                    return reply
+                } catch {
+                    sendFailed = true
+                    throw error
+                }
+            })
+        } catch {
+            return false
+        }
+
+        guard (try? reader.activeTabMetadata()) == expected else { return false }
+        do {
+            _ = try reader.activeTab(matching: expected)
+            return false
+        } catch ChromiumCapture.Failure.unavailable {
+            guard (try? reader.activeTabMetadata()) == expected,
+                  !sendFailed,
+                  properties == ["ID  ", "mode", "ID  ", "mode", "ID  ", "mode"] else { return false }
+            return true
+        } catch {
+            return false
+        }
     }
 
     private static func hasOnlyAddedPrivateWindow(before: ExternalTabSnapshot,
