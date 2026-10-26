@@ -36,7 +36,8 @@ The opt-in `private` and `recovery` modes run one combined sequence:
    `NSRunningApplication` must report the same PID, bundle and executable.
    Ownership is bound to the exact argument vector passed to that direct
    launch; any process exit, forwarding or identity ambiguity stops before
-   browser metadata or content reads.
+browser metadata or content reads. The argument vector is launch provenance
+from the retained child handle, not an OS read-back of live argv.
 2. Require the selected app and top ordinary window to belong to that fresh
    process. Capture the normal canary, then create one incognito window using a
    PID-addressed Apple Event. The metadata snapshot records only window IDs,
@@ -52,9 +53,12 @@ require existing Chrome Automation consent and never request it; denial skips
 before metadata/content reads. The exact UUID profile is retained at the
 reported temporary path for owner review. The harness requests graceful
 termination only through the still-live direct `Process` handle while its PID
-and app identity still match; it never removes the profile. A missing permission, unsupported app
-launch behavior, ownership mismatch, foreground mismatch or ambiguous window
-delta is a failed or skipped qualification, never a pass.
+and app identity still match; it never removes the profile. If app identity
+cannot be proven while the child remains live, it leaves that child alone and
+reports its PID rather than risking a signal to an unverified process. A missing
+permission, unsupported app launch behavior, ownership mismatch, foreground
+mismatch or ambiguous window delta is a failed or skipped qualification, never
+a pass.
 
 The private/recovery mode proves this capture sequence only. It does not
 qualify browser relaunch, restoration after process exit, the installed

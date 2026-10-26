@@ -219,6 +219,9 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
         } catch {
@@ -241,7 +244,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                                          canaryURL: canaryURL,
                                                          baselinePIDs: baselinePIDs),
               Self.provesIsolatedChromeOwnership(proof) else {
-            XCTFail("Chrome did not remain the fresh directly launched app process; no metadata/content read or termination")
+            XCTFail("Chrome app identity was not proven for task-owned child PID \(process.processIdentifier); no metadata/content read or termination attempted")
             return
         }
         chrome.activate(options: [.activateAllWindows])
@@ -374,8 +377,8 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             return
         }
         let recoveryCapture = FocusWatcher.browserTab(chrome, matching: normalTarget)
-        XCTAssertEqual(recoveryCapture.0, canaryURL,
-                       "Returning to the original task-owned normal canary must resume its exact capture")
+        XCTAssertTrue(recoveryCapture.0 == canaryURL,
+                      "Returning to the original task-owned normal canary must resume its exact capture; values omitted")
         print("BrowserDaddy isolated qualification recovered the original normal canary; values omitted")
     }
 
