@@ -115,6 +115,14 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let canaryURL: String
     }
 
+    private enum NormalCanaryObservation: String {
+        case empty, bareBlank, exact, unexpected
+    }
+
+    private enum NormalCanaryFailure: Error {
+        case targetChanged, unexpectedContent
+    }
+
     private enum ExternalTabSnapshotStage: String, CaseIterable {
         case frontmostApplication
         case foregroundPIDGate
@@ -308,9 +316,32 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                    skippedCapture: "isolated normal capture skipped")
             return
         }
-        let normalCapture = FocusWatcher.browserTab(chrome, matching: normalCaptureTarget)
-        guard normalCapture.0 == canaryURL else {
-            XCTFail("Isolated normal canary did not match; private phase skipped; values omitted")
+        do {
+            let result = try Self.waitForOwnedNormalCanaryCapture(expectedURL: canaryURL, ownsProcess: {
+                Self.ownsRunningChrome(process, chrome: chrome, proof: proof)
+            }, capture: {
+                _ = try ChromiumCapture(application: chrome)
+                let preflight = self.foregroundPreflight(chrome: chrome,
+                                                         controlledWindowID: windowID,
+                                                         expectedActiveTabID: tabID)
+                guard preflight.isReady, preflight.captureTarget == normalCaptureTarget else {
+                    throw NormalCanaryFailure.targetChanged
+                }
+                return FocusWatcher.browserTab(chrome, matching: normalCaptureTarget).0
+            })
+            let observations = result.observations.map(\.rawValue).sorted().joined(separator: ",")
+            guard result.ready else {
+                XCTFail("Isolated normal canary did not match; observations=\(observations); private phase skipped; values omitted")
+                return
+            }
+            print("BrowserDaddy isolated canary startup observations=\(observations); values omitted")
+        } catch ChromiumCapture.Failure.needsConsent {
+            throw XCTSkip("Existing Chrome Automation consent is unavailable; normal canary capture stopped")
+        } catch NormalCanaryFailure.unexpectedContent {
+            XCTFail("Isolated normal canary returned unexpected content; private phase skipped; values omitted")
+            return
+        } catch {
+            XCTFail("Isolated normal canary target became unavailable; private phase skipped; values omitted")
             return
         }
 
@@ -636,12 +667,34 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                 if try isReady() { return ownsProcess() }
             } catch ChromiumCapture.Failure.needsConsent {
                 throw ChromiumCapture.Failure.needsConsent
-            } catch {
+            } catch ChromiumCapture.Failure.unavailable {
                 // A registered app can still reject Apple Events during startup.
             }
             if sample + 1 < maxSamples { pause() }
         }
         return false
+    }
+
+    private static func waitForOwnedNormalCanaryCapture(
+        expectedURL: String,
+        maxSamples: Int = 100,
+        ownsProcess: () -> Bool,
+        capture: () throws -> String,
+        pause: () -> Void = { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+    ) throws -> (ready: Bool, observations: Set<NormalCanaryObservation>) {
+        var observations: Set<NormalCanaryObservation> = []
+        let ready = try waitForOwnedChromeReadiness(maxSamples: maxSamples, ownsProcess: ownsProcess, isReady: {
+            let value = try capture()
+            let observation: NormalCanaryObservation
+            if value == expectedURL { observation = .exact }
+            else if value.isEmpty { observation = .empty }
+            else if value == "about:blank" { observation = .bareBlank }
+            else { observation = .unexpected }
+            observations.insert(observation)
+            guard observation != .unexpected else { throw NormalCanaryFailure.unexpectedContent }
+            return observation == .exact
+        }, pause: pause)
+        return (ready, observations)
     }
 
     private static func gracefullyTerminateOwnedChrome(_ process: Process,
@@ -2128,6 +2181,38 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }, pause: {})
         XCTAssertTrue(ready)
         XCTAssertEqual(samples, 3)
+    }
+
+    func testOwnedNormalCanaryWaitsForExactContentWithoutAcceptingBareBlank() throws {
+        let expected = "about:blank#browserdaddy-fixture"
+        var samples = ["", "about:blank", expected]
+        let result = try Self.waitForOwnedNormalCanaryCapture(expectedURL: expected, maxSamples: 3,
+                                                             ownsProcess: { true }, capture: {
+            samples.removeFirst()
+        }, pause: {})
+        XCTAssertTrue(result.ready)
+        XCTAssertEqual(result.observations, [.empty, .bareBlank, .exact])
+        let stalled = try Self.waitForOwnedNormalCanaryCapture(expectedURL: expected, maxSamples: 2,
+                                                              ownsProcess: { true }, capture: { "about:blank" },
+                                                              pause: {})
+        XCTAssertFalse(stalled.ready)
+        XCTAssertEqual(stalled.observations, [.bareBlank])
+    }
+
+    func testOwnedNormalCanaryStopsOnUnexpectedContentOrChangedTarget() {
+        var samples = 0
+        XCTAssertThrowsError(try Self.waitForOwnedNormalCanaryCapture(expectedURL: "about:blank#canary",
+                                                                     ownsProcess: { true }, capture: {
+            samples += 1
+            return "https://example.invalid/not-the-canary"
+        }, pause: {}))
+        XCTAssertEqual(samples, 1)
+        XCTAssertThrowsError(try Self.waitForOwnedNormalCanaryCapture(expectedURL: "about:blank#canary",
+                                                                     ownsProcess: { true }, capture: {
+            samples += 1
+            throw NormalCanaryFailure.targetChanged
+        }, pause: {}))
+        XCTAssertEqual(samples, 2)
     }
 
     func testOwnedChromeReadinessStopsBeforeReadingAfterOwnershipLoss() throws {

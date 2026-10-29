@@ -43,7 +43,11 @@ The opt-in `private` and `recovery` modes run one combined sequence:
    and for the non-prompting metadata reader to become available. Consent
    denial stops immediately; startup refusal and readiness waits are bounded.
 2. Require the selected app and top ordinary window to belong to that fresh
-   process. Capture the normal canary, then create one incognito window using a
+   process. Wait for the exact normal canary while the same window and tab
+   remain selected. Empty capture and bare `about:blank` may still be loading;
+   neither qualifies as the canary. Unexpected content, consent denial or a
+   changed target stops the sequence. Diagnostics report only fixed observation
+   categories, never captured values. Then create one incognito window using a
    PID-addressed Apple Event. The metadata snapshot records only window IDs,
    modes and normal-window tab IDs. Incognito tab IDs, URLs and titles are
    never requested. The production focus reader must return app-only state.
