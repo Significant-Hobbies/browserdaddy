@@ -52,9 +52,16 @@ test('retains API proxy behavior on the Pages origin', async () => {
   }
 });
 
-test('unknown hosts 404', async () => {
-  const other = await worker.fetch(new Request('https://example.com/updates/appcast.xml'), env);
-  assert.equal(other.status, 404);
+test('unknown hosts cannot enter the app-specific marketing wrapper', async () => {
+  for (const host of ['example.com', 'browser.daddyrad.com.evil.example']) {
+    for (const path of ['/', '/release', '/privacy.md', '/updates/appcast.xml']) {
+      for (const method of ['GET', 'HEAD']) {
+        const other = await worker.fetch(new Request('https://' + host + path, { method }), env);
+        assert.equal(other.status, 404);
+        assert.equal(other.headers.get('location'), null);
+      }
+    }
+  }
 });
 
 test('rejects non-read methods', async () => {

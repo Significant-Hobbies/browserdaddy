@@ -1,7 +1,5 @@
-import { marketingLocation } from './marketing-redirect.mjs';
-
-// Each app owns its marketing redirects, update routes, assets, and deployment.
-export function createUpdateWorker({ canonicalHost, legacyHost, pagesHost, marketingMount }) {
+// Shared update delivery only. Each app owns its routes, assets, and deployment.
+export function createUpdateWorker({ canonicalHost, legacyHost, pagesHost }) {
   if (![canonicalHost, legacyHost, pagesHost].every((host) => typeof host === 'string' && /^[a-z0-9.-]+$/.test(host))) {
     throw new TypeError('Expected three explicit hostnames');
   }
@@ -18,14 +16,12 @@ export function createUpdateWorker({ canonicalHost, legacyHost, pagesHost, marke
     async fetch(request, env) {
       if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });
       const url = new URL(request.url);
-      const marketing = marketingLocation(url.pathname, url.search, marketingMount);
       if (url.hostname === legacyHost) {
-        return Response.redirect(marketing || canonical + url.pathname + url.search, 308);
+        return Response.redirect(canonical + url.pathname + url.search, 308);
       }
       if (url.hostname !== canonicalHost) {
         return new Response('Not found', { status: 404 });
       }
-      if (marketing) return Response.redirect(marketing, 308);
       if (url.pathname === '/download') {
         const feedURL = new URL(request.url);
         feedURL.pathname = '/updates/appcast.xml';
