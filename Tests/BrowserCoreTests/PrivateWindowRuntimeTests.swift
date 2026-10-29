@@ -247,7 +247,6 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             XCTFail("Chrome app identity was not proven for task-owned child PID \(process.processIdentifier); no metadata/content read or termination attempted")
             return
         }
-        chrome.activate(options: [.activateAllWindows])
         defer {
             if !Self.gracefullyTerminateOwnedChrome(process, chrome: chrome, proof: proof) {
                 XCTFail("Task-owned Chrome process did not terminate gracefully; isolated profile retained at \(profileURL.path)")
@@ -255,13 +254,23 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
 
         do {
-            _ = try ChromiumCapture(application: chrome)
+            guard try Self.waitForOwnedChromeReadiness(ownsProcess: {
+                Self.ownsRunningChrome(process, chrome: chrome, proof: proof)
+            }, isReady: {
+                guard chrome.isFinishedLaunching, chrome.activationPolicy == .regular else { return false }
+                _ = try ChromiumCapture(application: chrome)
+                return true
+            }) else {
+                XCTFail("Task-owned Chrome did not become ready; no tab content read")
+                return
+            }
         } catch ChromiumCapture.Failure.needsConsent {
             throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested; isolated profile retained")
         } catch {
             XCTFail("Isolated Chrome metadata reader is unavailable; no tab content read")
             return
         }
+        chrome.activate(options: [.activateAllWindows])
 
         guard let initial = waitForOwnedNormalCanary(chrome),
               let windowID = Int(initial.windowID),
@@ -383,8 +392,10 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             return
         }
         let recoveryCapture = FocusWatcher.browserTab(chrome, matching: normalTarget)
-        XCTAssertTrue(recoveryCapture.0 == canaryURL,
-                      "Returning to the original task-owned normal canary must resume its exact capture; values omitted")
+        guard recoveryCapture.0 == canaryURL else {
+            XCTFail("Returning to the original task-owned normal canary must resume its exact capture; values omitted")
+            return
+        }
         print("BrowserDaddy isolated qualification recovered the original normal canary; values omitted")
     }
 
@@ -601,20 +612,50 @@ final class PrivateWindowRuntimeTests: XCTestCase {
                                           proof.canaryURL]
     }
 
+    private static func ownsRunningChrome(_ process: Process,
+                                         chrome: NSRunningApplication,
+                                         proof: IsolatedChromeLaunchProof) -> Bool {
+        process.isRunning && !chrome.isTerminated
+            && proof.processID == process.processIdentifier
+            && proof.processID == chrome.processIdentifier
+            && provesIsolatedChromeOwnership(proof)
+            && chrome.bundleIdentifier == BrowserKind.chrome.bundleIdentifier
+            && chrome.bundleURL?.standardizedFileURL == proof.expectedApplicationURL.standardizedFileURL
+            && chrome.executableURL?.standardizedFileURL == proof.expectedExecutableURL.standardizedFileURL
+    }
+
+    private static func waitForOwnedChromeReadiness(
+        maxSamples: Int = 100,
+        ownsProcess: () -> Bool,
+        isReady: () throws -> Bool,
+        pause: () -> Void = { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+    ) throws -> Bool {
+        for sample in 0..<maxSamples {
+            guard ownsProcess() else { return false }
+            do {
+                if try isReady() { return ownsProcess() }
+            } catch ChromiumCapture.Failure.needsConsent {
+                throw ChromiumCapture.Failure.needsConsent
+            } catch {
+                // A registered app can still reject Apple Events during startup.
+            }
+            if sample + 1 < maxSamples { pause() }
+        }
+        return false
+    }
+
     private static func gracefullyTerminateOwnedChrome(_ process: Process,
                                                        chrome: NSRunningApplication,
                                                        proof: IsolatedChromeLaunchProof) -> Bool {
-        if !process.isRunning && chrome.isTerminated { return true }
-        guard process.isRunning,
-              proof.processID == process.processIdentifier,
-              proof.processID == chrome.processIdentifier,
-              provesIsolatedChromeOwnership(proof),
-              chrome.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
-              chrome.bundleURL?.standardizedFileURL == proof.expectedApplicationURL.standardizedFileURL,
-              chrome.executableURL?.standardizedFileURL == proof.expectedExecutableURL.standardizedFileURL else { return false }
-        guard chrome.terminate() else { return false }
-        for _ in 0..<50 {
-            if chrome.isTerminated { return !process.isRunning }
+        var terminationRequested = false
+        for _ in 0..<100 {
+            if !process.isRunning && chrome.isTerminated { return true }
+            if process.isRunning && !chrome.isTerminated {
+                guard ownsRunningChrome(process, chrome: chrome, proof: proof) else { return false }
+                if !terminationRequested, chrome.isFinishedLaunching, chrome.activationPolicy == .regular {
+                    terminationRequested = chrome.terminate()
+                }
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         return chrome.isTerminated && !process.isRunning
@@ -2076,6 +2117,61 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         XCTFail(
             "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedCaptureWindowID=\(captureWindowID); \(skippedCapture)"
         )
+    }
+
+    func testOwnedChromeReadinessWaitsThroughStartupRefusal() throws {
+        var samples = 0
+        let ready = try Self.waitForOwnedChromeReadiness(maxSamples: 3, ownsProcess: { true }, isReady: {
+            samples += 1
+            if samples == 1 { throw ChromiumCapture.Failure.unavailable }
+            return samples == 3
+        }, pause: {})
+        XCTAssertTrue(ready)
+        XCTAssertEqual(samples, 3)
+    }
+
+    func testOwnedChromeReadinessStopsBeforeReadingAfterOwnershipLoss() throws {
+        var owned = true
+        var samples = 0
+        let ready = try Self.waitForOwnedChromeReadiness(ownsProcess: { owned }, isReady: {
+            samples += 1
+            owned = false
+            return false
+        }, pause: {})
+        XCTAssertFalse(ready)
+        XCTAssertEqual(samples, 1)
+        XCTAssertFalse(try Self.waitForOwnedChromeReadiness(ownsProcess: { owned }, isReady: {
+            XCTFail("Unknown process must not receive a readiness probe")
+            return true
+        }, pause: {}))
+    }
+
+    func testOwnedChromeReadinessDoesNotRetryConsentDenial() {
+        var samples = 0
+        XCTAssertThrowsError(try Self.waitForOwnedChromeReadiness(ownsProcess: { true }, isReady: {
+            samples += 1
+            throw ChromiumCapture.Failure.needsConsent
+        }, pause: {})) { error in
+            guard case ChromiumCapture.Failure.needsConsent = error else {
+                return XCTFail("Consent denial must remain explicit")
+            }
+        }
+        XCTAssertEqual(samples, 1)
+    }
+
+    func testOwnedChromeReadinessTimesOutAndRechecksOwnershipBeforeSuccess() throws {
+        var samples = 0
+        XCTAssertFalse(try Self.waitForOwnedChromeReadiness(maxSamples: 2, ownsProcess: { true }, isReady: {
+            samples += 1
+            return false
+        }, pause: {}))
+        XCTAssertEqual(samples, 2)
+
+        var owned = true
+        XCTAssertFalse(try Self.waitForOwnedChromeReadiness(ownsProcess: { owned }, isReady: {
+            owned = false
+            return true
+        }, pause: {}))
     }
 
     func testIsolatedChromeOwnershipRequiresFreshExactAppAndProfileArguments() {
