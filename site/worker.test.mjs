@@ -66,7 +66,7 @@ test('known web routes and legacy marketing links redirect directly with exact q
   const routes = [
     ['/', '/'], ['/index.html', '/'], ['/index.md', '/index.md'],
     ['/llms.txt', '/llms.txt'], ['/llms-full.txt', '/llms-full.txt'],
-    ['/ai.txt', '/ai.txt'], ['/robots.txt', '/robots.txt'], ['/sitemap.xml', '/sitemap.xml'],
+    ['/ai.txt', '/ai.txt'], ['/sitemap.xml', '/sitemap.xml'],
     ['/blog/rss.xml', '/blog/rss.xml'],
   ];
   for (const section of ['privacy', 'terms', 'support', 'accessibility', 'release', 'testflight', 'blog']) {
@@ -95,8 +95,8 @@ test('API, metadata, static resources and unknown paths retain the existing prox
     return new Response('upstream', { status, headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    for (const path of ['/api/ai', '/api/md', '/api/md/_catalog', '/openapi.json', '/release.json', '/downloads/missing.dmg', '/releases/missing.dmg', '/download/', '/assets/missing.png', '/missing', '/blog/missing/', '/blog/missing.md', '/blog/background-apps/']) {
-      status = path.startsWith('/api/') || path === '/openapi.json' ? 200 : 404;
+    for (const path of ['/api/ai', '/api/md', '/api/md/_catalog', '/openapi.json', '/robots.txt', '/release.json', '/downloads/missing.dmg', '/releases/missing.dmg', '/download/', '/assets/missing.png', '/missing', '/blog/missing/', '/blog/missing.md', '/blog/background-apps/']) {
+      status = path.startsWith('/api/') || path === '/openapi.json' || path === '/robots.txt' ? 200 : 404;
       for (const method of ['GET', 'HEAD']) {
         const response = await worker.fetch(new Request('https://browser.daddyrad.com' + path + query, { method }), env);
         assert.equal(response.status, status, `${method} ${path}`);
@@ -119,7 +119,7 @@ test('API, metadata, static resources and unknown paths retain the existing prox
 
 test('protected legacy redirects and rejected methods retain their existing contracts', async () => {
   const query = '?keep=a%2Fb';
-  for (const path of ['/download', '/updates/appcast.xml', '/release.json', '/releases/missing.dmg', '/api/ai', '/api/md', '/openapi.json']) {
+  for (const path of ['/download', '/updates/appcast.xml', '/release.json', '/robots.txt', '/releases/missing.dmg', '/api/ai', '/api/md', '/openapi.json']) {
     for (const method of ['GET', 'HEAD']) {
       const response = await worker.fetch(new Request('https://browserdaddy.significanthobbies.com' + path + query, { method }), env);
       assert.equal(response.status, 308);
