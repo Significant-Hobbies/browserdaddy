@@ -34,8 +34,9 @@ The opt-in `private` and `recovery` modes run one combined sequence:
    executable directly with the profile and fixed `about:blank` canary. The
    retained `Process` handle must remain live at the fresh PID, and
    `NSRunningApplication` must report the same PID, bundle and executable.
-   Ownership is bound to the exact argument vector passed to that direct
-   launch; any process exit, forwarding or identity ambiguity stops before
+   Ownership requires the live retained child and exact native app identity;
+   the argument check validates the intended launch recipe. Any process exit,
+   forwarding or identity ambiguity stops before
    browser metadata or content reads. The argument vector is launch provenance
    from the retained child handle, not an OS read-back of live argv.
    Registration alone is not launch readiness. While the same owned child
@@ -64,8 +65,9 @@ Run: `BROWSERDADDY_PRIVACY_MODE=private swift test --filter PrivateWindowRuntime
 require existing Chrome Automation consent and never request it; denial skips
 before metadata/content reads. The exact UUID profile is retained at the
 reported temporary path for owner review. The harness requests graceful
-termination only through the still-live direct `Process` handle while its PID
-and app identity still match; it never removes the profile. If app identity
+quit via `NSRunningApplication.terminate()` only while the retained direct
+`Process` handle is live and its PID and app identity still match; it never
+removes the profile. If app identity
 remains valid during startup, cleanup waits for launch readiness and retries
 an initially refused graceful termination within a bounded interval. If identity
 cannot be proven while the child remains live, it leaves that child alone and
