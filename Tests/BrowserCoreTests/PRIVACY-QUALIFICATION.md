@@ -62,8 +62,10 @@ The opt-in `private` and `recovery` modes run one combined sequence:
 
 Run: `BROWSERDADDY_PRIVACY_MODE=private swift test --filter PrivateWindowRuntimeTests/testChromeWindowPrivacyAtTheActualCaptureBoundaries`.
 `BROWSERDADDY_PRIVACY_MODE=recovery` runs the same combined sequence. Both
-require existing Chrome Automation consent and never request it; denial skips
-before metadata/content reads. The exact UUID profile is retained at the
+require existing Chrome Automation consent and never request it. Initial
+consent denial skips before metadata/content reads. A denial during later
+setup or recovery stops with a skip or failure; neither qualifies as a pass.
+The exact UUID profile is retained at the
 reported temporary path for owner review. The harness requests graceful
 quit via `NSRunningApplication.terminate()` only while the retained direct
 `Process` handle is live and its PID and app identity still match; it never

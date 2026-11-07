@@ -257,7 +257,7 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
         defer {
             if !Self.gracefullyTerminateOwnedChrome(process, chrome: chrome, proof: proof) {
-                XCTFail("Task-owned Chrome process did not terminate gracefully; isolated profile retained at \(profileURL.path)")
+                XCTFail("Task-owned Chrome process did not terminate gracefully; PID=\(process.processIdentifier), running=\(process.isRunning), appTerminated=\(chrome.isTerminated); isolated profile retained at \(profileURL.path)")
             }
         }
 
