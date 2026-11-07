@@ -290,6 +290,31 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let normalTarget = ChromiumCapture.ActiveTabMetadata(windowID: initial.windowID,
                                                              mode: "normal",
                                                              activeTabID: tabID)
+        // Chrome startup may select a welcome/new-tab page instead of the URL
+        // supplied on its command line. Establish the fixture explicitly in the
+        // owned normal tab; never treat arbitrary startup content as a canary.
+        guard Self.ownsRunningChrome(process, chrome: chrome, proof: proof) else {
+            XCTFail("Owned Chrome identity changed before canary setup; no content read")
+            return
+        }
+        let beforeSetup = foregroundPreflight(chrome: chrome, controlledWindowID: windowID,
+                                              expectedActiveTabID: tabID)
+        guard Self.ownsRunningChrome(process, chrome: chrome, proof: proof),
+              beforeSetup.isReady, beforeSetup.captureTarget == normalTarget else {
+            XCTFail("Owned normal target changed before canary setup; no content read")
+            return
+        }
+        do {
+            let setup = try Self.makeSetNormalCanaryEvent(processID: chrome.processIdentifier,
+                                                         target: normalTarget, url: canaryURL)
+            let reply = try setup.sendEvent(options: ChromiumCapture.sendOptions, timeout: 3)
+            if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)), error.int32Value != 0 {
+                throw RuntimeProbeError.script(number: Int(error.int32Value))
+            }
+        } catch {
+            XCTFail("Owned normal canary setup failed; no content read")
+            return
+        }
         let beforePrivate: ExternalTabSnapshot
         do {
             beforePrivate = try externalTabSnapshot(expectedProcessID: Int(chrome.processIdentifier))
@@ -712,6 +737,30 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         return chrome.isTerminated && !process.isRunning
+    }
+
+    private static func makeSetNormalCanaryEvent(
+        processID: pid_t, target: ChromiumCapture.ActiveTabMetadata, url: String
+    ) throws -> NSAppleEventDescriptor {
+        guard processID > 0, target.mode == "normal",
+              let tabID = target.activeTabID, let tabNumber = Int32(tabID), tabNumber > 0,
+              let windowNumber = Int32(target.windowID), windowNumber > 0,
+              String(tabNumber) == tabID, String(windowNumber) == target.windowID,
+              url == "about:blank#browserdaddy-private-recovery-20261026" else {
+            throw ChromiumCapture.Failure.unavailable
+        }
+        let window = try ChromiumCapture.object("cwin", form: formUniqueID,
+                                                key: NSAppleEventDescriptor(int32: windowNumber), container: .null())
+        let tab = try ChromiumCapture.object("CrTb", form: formUniqueID,
+                                             key: NSAppleEventDescriptor(int32: tabNumber), container: window)
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
+                                           eventID: AEEventID(kAESetData),
+                                           targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
+                                           returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(try ChromiumCapture.property("URL ", of: tab), forKeyword: AEKeyword(keyDirectObject))
+        event.setParam(NSAppleEventDescriptor(string: url), forKeyword: AEKeyword(keyAEData))
+        return event
     }
 
     private static func createIncognitoWindow(processID: pid_t) throws {
@@ -2339,6 +2388,27 @@ final class PrivateWindowRuntimeTests: XCTestCase {
             processID: 720, selectedPID: 720, topWindowPID: 720,
             windows: [normal, normal])
         XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: duplicateWindowIDs))
+    }
+
+    func testNormalCanarySetupPinsPIDWindowAndTabAndRejectsPrivateTargets() throws {
+        let target = ChromiumCapture.ActiveTabMetadata(windowID: "42", mode: "normal", activeTabID: "9")
+        let url = "about:blank#browserdaddy-private-recovery-20261026"
+        let event = try Self.makeSetNormalCanaryEvent(processID: 829, target: target, url: url)
+        XCTAssertEqual(event.eventID, AEEventID(kAESetData))
+        XCTAssertEqual(event.attributeDescriptor(forKeyword: keyAddressAttr)?.data,
+                       NSAppleEventDescriptor(processIdentifier: 829).data)
+        XCTAssertEqual(event.paramDescriptor(forKeyword: AEKeyword(keyAEData))?.stringValue, url)
+        let property = try XCTUnwrap(event.paramDescriptor(forKeyword: keyDirectObject))
+        XCTAssertEqual(property.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue, ChromiumCapture.code("URL "))
+        let tab = try XCTUnwrap(property.forKeyword(AEKeyword(keyAEContainer)))
+        XCTAssertEqual(tab.forKeyword(AEKeyword(keyAEKeyData))?.int32Value, 9)
+        let window = try XCTUnwrap(tab.forKeyword(AEKeyword(keyAEContainer)))
+        XCTAssertEqual(window.forKeyword(AEKeyword(keyAEKeyData))?.int32Value, 42)
+        for mode in ["incognito", "unknown"] {
+            XCTAssertThrowsError(try Self.makeSetNormalCanaryEvent(processID: 829,
+                target: .init(windowID: "42", mode: mode, activeTabID: "9"), url: url))
+        }
+        XCTAssertThrowsError(try Self.makeSetNormalCanaryEvent(processID: 829, target: target, url: "https://example.invalid"))
     }
 
     func testWindowSelectionEventUsesCanonicalCoreSetEvent() throws {

@@ -43,7 +43,11 @@ The opt-in `private` and `recovery` modes run one combined sequence:
    and for the non-prompting metadata reader to become available. Consent
    denial stops immediately; startup refusal and readiness waits are bounded.
 2. Require the selected app and top ordinary window to belong to that fresh
-   process. Wait for the exact normal canary while the same window and tab
+   process. Establish the fixed canary explicitly in the exact owned normal
+   window/tab using a PID-addressed, non-prompting set event: Chrome startup
+   selection alone does not prove the command-line URL became its active tab.
+   Private/unknown targets and arbitrary URLs cannot receive this setup event.
+   Wait for the exact normal canary while the same window and tab
    remain selected. Empty capture and bare `about:blank` may still be loading;
    neither qualifies as the canary. Unexpected content, consent denial or a
    changed target stops the sequence. Diagnostics report only fixed observation
