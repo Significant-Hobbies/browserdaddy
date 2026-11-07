@@ -102,6 +102,27 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         let tabID: Int
     }
 
+    private struct IsolatedChromeLaunchProof {
+        let processID: pid_t
+        let bundleIdentifier: String?
+        let applicationURL: URL?
+        let executableURL: URL?
+        let expectedExecutableURL: URL
+        let expectedApplicationURL: URL
+        let baselinePIDs: Set<pid_t>
+        let processArguments: [String]
+        let profileURL: URL
+        let canaryURL: String
+    }
+
+    private enum NormalCanaryObservation: String {
+        case empty, bareBlank, exact, unexpected
+    }
+
+    private enum NormalCanaryFailure: Error {
+        case targetChanged, unexpectedContent
+    }
+
     private enum ExternalTabSnapshotStage: String, CaseIterable {
         case frontmostApplication
         case foregroundPIDGate
@@ -151,11 +172,651 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         }
         XCTAssertTrue(["normal", "private", "recovery"].contains(mode))
         guard ["normal", "private", "recovery"].contains(mode) else { return }
-        guard mode == "normal" else {
-            throw XCTSkip("This harness path is normal-only; private/recovery inventory is not read from owner windows")
+        if mode == "normal" {
+            let canary = "about:blank#browserdaddy-qualification-20261024"
+            try runControlledNormalCanary(url: canary)
+            return
         }
-        let canary = "about:blank#browserdaddy-qualification-20261024"
-        try runControlledNormalCanary(url: canary)
+        try runIsolatedPrivateRecoveryCanary()
+    }
+
+    /// Runs normal -> private exclusion -> return to the same normal canary in
+    /// a fresh Chrome instance backed by a UUID profile created for this test.
+    /// The browser-owned profile is retained for review; only this exact
+    /// process may receive a graceful termination request.
+    private func runIsolatedPrivateRecoveryCanary() throws {
+        let bundleID = BrowserKind.chrome.bundleIdentifier
+        guard let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
+              Bundle(url: applicationURL)?.bundleIdentifier == bundleID else {
+            XCTFail("Could not resolve the exact Chrome application; no browser process launched")
+            return
+        }
+
+        let baselinePIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .map(\.processIdentifier))
+        let profileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BrowserDaddy-private-recovery-\(UUID().uuidString)", isDirectory: true)
+        guard !FileManager.default.fileExists(atPath: profileURL.path) else {
+            XCTFail("Unique isolated Chrome profile path already exists; no browser process launched")
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(at: profileURL, withIntermediateDirectories: false)
+        } catch {
+            XCTFail("Could not create the unique isolated Chrome profile; no browser process launched")
+            return
+        }
+
+        let canaryURL = "about:blank#browserdaddy-private-recovery-20261026"
+        print("BrowserDaddy isolated qualification profile retained at \(profileURL.path)")
+        let arguments = [
+            "--user-data-dir=\(profileURL.path)",
+            "--no-first-run",
+            "--no-default-browser-check",
+            canaryURL,
+        ]
+        guard let executableURL = Bundle(url: applicationURL)?.executableURL,
+              executableURL.standardizedFileURL.deletingLastPathComponent()
+                == applicationURL.standardizedFileURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+                    .standardizedFileURL,
+              FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            XCTFail("Chrome executable could not be resolved inside the exact app bundle; no browser launched")
+            return
+        }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            XCTFail("Chrome executable could not start with the isolated profile; no tab content read")
+            return
+        }
+
+        guard let chrome = Self.waitForRunningApplication(process: process,
+                                                          bundleID: bundleID,
+                                                          applicationURL: applicationURL,
+                                                          executableURL: executableURL,
+                                                          baselinePIDs: baselinePIDs),
+              process.isRunning,
+              let proof = Self.isolatedChromeLaunchProof(process: process,
+                                                         chrome: chrome,
+                                                         executableURL: executableURL,
+                                                         applicationURL: applicationURL,
+                                                         arguments: arguments,
+                                                         profileURL: profileURL,
+                                                         canaryURL: canaryURL,
+                                                         baselinePIDs: baselinePIDs),
+              Self.provesIsolatedChromeOwnership(proof) else {
+            XCTFail("Chrome app identity was not proven for task-owned child PID \(process.processIdentifier); no metadata/content read or termination attempted")
+            return
+        }
+        defer {
+            if !Self.gracefullyTerminateOwnedChrome(process, chrome: chrome, proof: proof) {
+                XCTFail("Task-owned Chrome process did not terminate gracefully; PID=\(process.processIdentifier), running=\(process.isRunning), appTerminated=\(chrome.isTerminated); isolated profile retained at \(profileURL.path)")
+            }
+        }
+
+        do {
+            guard try Self.waitForOwnedChromeReadiness(ownsProcess: {
+                Self.ownsRunningChrome(process, chrome: chrome, proof: proof)
+            }, isReady: {
+                guard chrome.isFinishedLaunching, chrome.activationPolicy == .regular else { return false }
+                _ = try ChromiumCapture(application: chrome)
+                return true
+            }) else {
+                XCTFail("Task-owned Chrome did not become ready; no tab content read")
+                return
+            }
+        } catch ChromiumCapture.Failure.needsConsent {
+            throw XCTSkip("Existing Chrome Automation consent is unavailable; no grant requested; isolated profile retained")
+        } catch {
+            XCTFail("Isolated Chrome metadata reader is unavailable; no tab content read")
+            return
+        }
+        chrome.activate(options: [.activateAllWindows])
+
+        guard let initial = waitForOwnedNormalCanary(chrome),
+              let windowID = Int(initial.windowID),
+              let tabID = initial.activeTabID,
+              let nativeTabID = Int(tabID) else {
+            XCTFail("Isolated normal canary foreground or identity preflight failed; no tab content read")
+            return
+        }
+        let normalTarget = ChromiumCapture.ActiveTabMetadata(windowID: initial.windowID,
+                                                             mode: "normal",
+                                                             activeTabID: tabID)
+        // Chrome startup may select a welcome/new-tab page instead of the URL
+        // supplied on its command line. Establish the fixture explicitly in the
+        // owned normal tab; never treat arbitrary startup content as a canary.
+        guard Self.ownsRunningChrome(process, chrome: chrome, proof: proof) else {
+            XCTFail("Owned Chrome identity changed before canary setup; no content read")
+            return
+        }
+        let beforeSetup = foregroundPreflight(chrome: chrome, controlledWindowID: windowID,
+                                              expectedActiveTabID: tabID)
+        guard Self.ownsRunningChrome(process, chrome: chrome, proof: proof),
+              beforeSetup.isReady, beforeSetup.captureTarget == normalTarget else {
+            XCTFail("Owned normal target changed before canary setup; no content read")
+            return
+        }
+        do {
+            let setup = try Self.makeSetNormalCanaryEvent(processID: chrome.processIdentifier,
+                                                         target: normalTarget, url: canaryURL)
+            let reply = try setup.sendEvent(options: ChromiumCapture.sendOptions, timeout: 3)
+            if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)), error.int32Value != 0 {
+                throw RuntimeProbeError.script(number: Int(error.int32Value))
+            }
+        } catch {
+            XCTFail("Owned normal canary setup failed; no content read")
+            return
+        }
+        let beforePrivate: ExternalTabSnapshot
+        do {
+            beforePrivate = try externalTabSnapshot(expectedProcessID: Int(chrome.processIdentifier))
+        } catch {
+            XCTFail("Isolated normal metadata snapshot failed; no additional content read")
+            return
+        }
+        guard let originalWindow = beforePrivate.windows.first,
+              originalWindow.windowID == windowID,
+              originalWindow.mode == "normal",
+              originalWindow.activeTabID == nativeTabID,
+              originalWindow.tabIDs?.contains(nativeTabID) == true,
+              !beforePrivate.windows.contains(where: { $0.mode == "incognito" }) else {
+            XCTFail("Isolated normal window identity is ambiguous; no private window created")
+            return
+        }
+        let beforeNormalCapture = foregroundPreflight(chrome: chrome,
+                                                      controlledWindowID: windowID,
+                                                      expectedActiveTabID: tabID)
+        guard beforeNormalCapture.isReady,
+              let normalCaptureTarget = beforeNormalCapture.captureTarget else {
+            reportPreflightFailure(beforeNormalCapture, chrome: chrome,
+                                   controlledWindowID: windowID,
+                                   skippedCapture: "isolated normal capture skipped")
+            return
+        }
+        do {
+            let result = try Self.waitForOwnedNormalCanaryCapture(expectedURL: canaryURL, ownsProcess: {
+                Self.ownsRunningChrome(process, chrome: chrome, proof: proof)
+            }, capture: {
+                _ = try ChromiumCapture(application: chrome)
+                let preflight = self.foregroundPreflight(chrome: chrome,
+                                                         controlledWindowID: windowID,
+                                                         expectedActiveTabID: tabID)
+                guard preflight.isReady, preflight.captureTarget == normalCaptureTarget else {
+                    throw NormalCanaryFailure.targetChanged
+                }
+                return FocusWatcher.browserTab(chrome, matching: normalCaptureTarget).0
+            })
+            let observations = result.observations.map(\.rawValue).sorted().joined(separator: ",")
+            guard result.ready else {
+                XCTFail("Isolated normal canary did not match; observations=\(observations); private phase skipped; values omitted")
+                return
+            }
+            print("BrowserDaddy isolated canary startup observations=\(observations); values omitted")
+        } catch ChromiumCapture.Failure.needsConsent {
+            throw XCTSkip("Existing Chrome Automation consent is unavailable; normal canary capture stopped")
+        } catch NormalCanaryFailure.unexpectedContent {
+            XCTFail("Isolated normal canary returned unexpected content; private phase skipped; values omitted")
+            return
+        } catch {
+            XCTFail("Isolated normal canary target became unavailable; private phase skipped; values omitted")
+            return
+        }
+
+        let beforePrivateCreate = foregroundPreflight(chrome: chrome,
+                                                      controlledWindowID: windowID,
+                                                      expectedActiveTabID: tabID)
+        guard beforePrivateCreate.isReady else {
+            reportPreflightFailure(beforePrivateCreate, chrome: chrome,
+                                   controlledWindowID: windowID,
+                                   skippedCapture: "private window creation skipped")
+            return
+        }
+        do {
+            try Self.createIncognitoWindow(processID: chrome.processIdentifier)
+        } catch ChromiumCapture.Failure.needsConsent {
+            throw XCTSkip("Existing Chrome Automation consent is unavailable; private window creation skipped")
+        } catch {
+            XCTFail("Task-owned incognito window creation failed; private capture skipped")
+            return
+        }
+
+        let afterPrivate: ExternalTabSnapshot
+        do {
+            afterPrivate = try waitForPrivateWindow(chrome,
+                                                    baseline: beforePrivate,
+                                                    expectedNormalWindowID: windowID,
+                                                    expectedNormalTabID: nativeTabID)
+        } catch {
+            XCTFail("Task-owned private window identity was ambiguous; private content capture skipped")
+            return
+        }
+        guard let privateWindow = afterPrivate.windows.first,
+              privateWindow.mode == "incognito",
+              privateWindow.tabIDs == nil,
+              privateWindow.activeTabID == nil,
+              privateWindow.windowID != windowID,
+              Self.hasOnlyAddedPrivateWindow(before: beforePrivate, after: afterPrivate) else {
+            XCTFail("Private metadata did not fail closed at the isolated capture boundary")
+            return
+        }
+        guard let privateMetadata = try? ChromiumCapture(application: chrome).activeTabMetadata(),
+              privateMetadata.windowID == String(privateWindow.windowID),
+              privateMetadata.mode == "incognito",
+              privateMetadata.activeTabID == nil else {
+            XCTFail("Private capture target was not metadata-only incognito; no URL/title read requested")
+            return
+        }
+        guard privateForegroundPreflight(chrome: chrome, expected: privateMetadata) else {
+            XCTFail("Private foreground or window identity changed; no private capture attempted")
+            return
+        }
+        guard privateCaptureIsRefusedBeforeContent(chrome: chrome, expected: privateMetadata) else {
+            XCTFail("Private capture did not produce a verified metadata-only refusal; values omitted")
+            return
+        }
+        let privateCapture = FocusWatcher.browserTab(chrome, matching: privateMetadata)
+        guard privateCapture.0.isEmpty && privateCapture.1.isEmpty else {
+            XCTFail("Private focus returned content unexpectedly; values omitted")
+            return
+        }
+        print("BrowserDaddy isolated qualification private exclusion passed; private tab fields were not read")
+
+        do {
+            try Self.setWindowToFront(processID: chrome.processIdentifier, windowID: String(windowID))
+        } catch {
+            XCTFail("Returning to the original isolated normal window failed; capture skipped")
+            return
+        }
+        let recovered = waitForForegroundPreflight(maxSamples: 100, pollInterval: 0.1) {
+            foregroundPreflight(chrome: chrome,
+                                controlledWindowID: windowID,
+                                expectedActiveTabID: tabID)
+        }
+        guard recovered.isReady,
+              recovered.captureTarget == normalTarget else {
+            reportPreflightFailure(recovered, chrome: chrome,
+                                   controlledWindowID: windowID,
+                                   skippedCapture: "recovery capture skipped")
+            return
+        }
+        let recoveryCapture = FocusWatcher.browserTab(chrome, matching: normalTarget)
+        guard recoveryCapture.0 == canaryURL else {
+            XCTFail("Returning to the original task-owned normal canary must resume its exact capture; values omitted")
+            return
+        }
+        print("BrowserDaddy isolated qualification recovered the original normal canary; values omitted")
+    }
+
+    private func waitForOwnedNormalCanary(_ chrome: NSRunningApplication) -> ChromiumCapture.ActiveTabMetadata? {
+        var result: ChromiumCapture.ActiveTabMetadata?
+        _ = waitForForegroundPreflight(maxSamples: 100, pollInterval: 0.1) {
+            guard let metadata = try? ChromiumCapture(application: chrome).activeTabMetadata(),
+                  metadata.mode == "normal",
+                  let windowID = Int(metadata.windowID),
+                  let tabID = metadata.activeTabID else {
+                return ForegroundPreflight(selectedApplication: NSWorkspace.shared.frontmostApplication,
+                                           selectedPIDMatches: false,
+                                           topWindowPIDMatches: false,
+                                           captureWindowMatches: false,
+                                           windowModeMatches: false,
+                                           activeTabMatches: false)
+            }
+            let preflight = foregroundPreflight(chrome: chrome,
+                                                controlledWindowID: windowID,
+                                                expectedActiveTabID: tabID)
+            if preflight.isReady { result = metadata }
+            return preflight
+        }
+        guard let result, result.mode == "normal", result.activeTabID != nil else { return nil }
+        return result
+    }
+
+    private func waitForPrivateWindow(_ chrome: NSRunningApplication,
+                                      baseline: ExternalTabSnapshot,
+                                      expectedNormalWindowID: Int,
+                                      expectedNormalTabID: Int) throws -> ExternalTabSnapshot {
+        var last: ExternalTabSnapshot?
+        for _ in 0..<100 {
+            guard !chrome.isTerminated,
+                  chrome.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == chrome.processIdentifier,
+                  topmostOrdinaryWindowPID() == chrome.processIdentifier else {
+                throw ExternalMetadataFailure.unavailable
+            }
+            let current = try externalTabSnapshot(expectedProcessID: Int(chrome.processIdentifier))
+            last = current
+            if Self.hasOnlyAddedPrivateWindow(before: baseline, after: current),
+               let first = current.windows.first,
+               first.mode == "incognito",
+               first.windowID != expectedNormalWindowID,
+               current.windows.contains(where: {
+                   $0.windowID == expectedNormalWindowID
+                       && $0.mode == "normal"
+                       && $0.activeTabID == expectedNormalTabID
+                       && $0.tabIDs?.contains(expectedNormalTabID) == true
+               }) {
+                return current
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        if let last, Self.hasOnlyAddedPrivateWindow(before: baseline, after: last) {
+            throw ExternalMetadataFailure.unavailable
+        }
+        throw ExternalMetadataFailure.unavailable
+    }
+
+    private func privateForegroundPreflight(chrome: NSRunningApplication,
+                                            expected: ChromiumCapture.ActiveTabMetadata) -> Bool {
+        guard !chrome.isTerminated,
+              chrome.activationPolicy == .regular,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == chrome.processIdentifier,
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
+              topmostOrdinaryWindowPID() == chrome.processIdentifier,
+              let metadata = try? ChromiumCapture(application: chrome).activeTabMetadata(),
+              metadata == expected,
+              metadata.mode == "incognito",
+              metadata.activeTabID == nil else { return false }
+        return !chrome.isTerminated
+            && NSWorkspace.shared.frontmostApplication?.processIdentifier == chrome.processIdentifier
+            && topmostOrdinaryWindowPID() == chrome.processIdentifier
+    }
+
+    private func privateCaptureIsRefusedBeforeContent(
+        chrome: NSRunningApplication,
+        expected: ChromiumCapture.ActiveTabMetadata
+    ) -> Bool {
+        let processID = chrome.processIdentifier
+        let address = NSAppleEventDescriptor(processIdentifier: processID)
+        var properties: [String] = []
+        var sendFailed = false
+        let reader: ChromiumCapture
+        do {
+            reader = try ChromiumCapture(processID: processID, permission: { target in
+                ChromiumCapture.permission(address: target, prompt: false)
+            }, send: { event, options in
+                guard event.eventClass == AEEventClass(kAECoreSuite),
+                      event.eventID == AEEventID(kAEGetData),
+                      event.attributeDescriptor(forKeyword: keyAddressAttr)?.data == address.data,
+                      options.contains(.neverInteract),
+                      options.contains(.waitForReply),
+                      options.rawValue & UInt(kAEDoNotPromptForUserConsent) != 0,
+                      let directObject = event.paramDescriptor(forKeyword: keyDirectObject),
+                      let propertyCode = directObject.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue else {
+                    sendFailed = true
+                    return NSAppleEventDescriptor.null()
+                }
+                properties.append(Self.textCode(propertyCode))
+                do {
+                    let reply = try event.sendEvent(options: options, timeout: 2)
+                    if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)),
+                       error.int32Value != 0 {
+                        sendFailed = true
+                    }
+                    return reply
+                } catch {
+                    sendFailed = true
+                    throw error
+                }
+            })
+        } catch {
+            return false
+        }
+
+        guard (try? reader.activeTabMetadata()) == expected else { return false }
+        do {
+            _ = try reader.activeTab(matching: expected)
+            return false
+        } catch ChromiumCapture.Failure.unavailable {
+            guard (try? reader.activeTabMetadata()) == expected,
+                  !sendFailed,
+                  properties == ["ID  ", "mode", "ID  ", "mode", "ID  ", "mode"] else { return false }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func hasOnlyAddedPrivateWindow(before: ExternalTabSnapshot,
+                                                  after: ExternalTabSnapshot) -> Bool {
+        guard before.processID == after.processID,
+              before.selectedPID == after.selectedPID,
+              before.topWindowPID == after.topWindowPID,
+              after.windows.count == before.windows.count + 1 else { return false }
+
+        func uniqueWindowsByID(_ windows: [ExternalWindowSnapshot]) -> [Int: ExternalWindowSnapshot]? {
+            var result: [Int: ExternalWindowSnapshot] = [:]
+            for window in windows {
+                guard result.updateValue(window, forKey: window.windowID) == nil else { return nil }
+            }
+            return result
+        }
+
+        guard let beforeByID = uniqueWindowsByID(before.windows),
+              let afterByID = uniqueWindowsByID(after.windows) else { return false }
+        guard Set(beforeByID.keys).isSubset(of: Set(afterByID.keys)) else { return false }
+        let addedIDs = Set(afterByID.keys).subtracting(beforeByID.keys)
+        guard addedIDs.count == 1,
+              let added = addedIDs.first.flatMap({ afterByID[$0] }),
+              added.mode == "incognito",
+              added.tabIDs == nil,
+              added.activeTabID == nil else { return false }
+        return beforeByID.allSatisfy { id, window in afterByID[id] == window }
+    }
+
+    private static func isolatedChromeLaunchProof(process: Process,
+                                                  chrome: NSRunningApplication,
+                                                  executableURL: URL,
+                                                  applicationURL: URL,
+                                                  arguments: [String],
+                                                  profileURL: URL,
+                                                  canaryURL: String,
+                                                  baselinePIDs: Set<pid_t>) -> IsolatedChromeLaunchProof? {
+        guard process.isRunning,
+              process.processIdentifier == chrome.processIdentifier,
+              chrome.bundleIdentifier == BrowserKind.chrome.bundleIdentifier,
+              chrome.bundleURL?.standardizedFileURL == applicationURL.standardizedFileURL,
+              chrome.executableURL?.standardizedFileURL == executableURL.standardizedFileURL else { return nil }
+        return IsolatedChromeLaunchProof(processID: process.processIdentifier,
+                                         bundleIdentifier: chrome.bundleIdentifier,
+                                         applicationURL: chrome.bundleURL,
+                                         executableURL: chrome.executableURL,
+                                         expectedExecutableURL: executableURL,
+                                         expectedApplicationURL: applicationURL,
+                                         baselinePIDs: baselinePIDs,
+                                         processArguments: arguments,
+                                         profileURL: profileURL,
+                                         canaryURL: canaryURL)
+    }
+
+    private static func waitForRunningApplication(process: Process,
+                                                  bundleID: String,
+                                                  applicationURL: URL,
+                                                  executableURL: URL,
+                                                  baselinePIDs: Set<pid_t>) -> NSRunningApplication? {
+        for _ in 0..<50 {
+            guard process.isRunning,
+                  !baselinePIDs.contains(process.processIdentifier) else { return nil }
+            if let application = NSWorkspace.shared.runningApplications.first(where: {
+                $0.processIdentifier == process.processIdentifier
+            }),
+               application.bundleIdentifier == bundleID,
+               application.bundleURL?.standardizedFileURL == applicationURL.standardizedFileURL,
+               application.executableURL?.standardizedFileURL == executableURL.standardizedFileURL {
+                return application
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return nil
+    }
+
+    private static func provesIsolatedChromeOwnership(_ proof: IsolatedChromeLaunchProof) -> Bool {
+        proof.processID > 0
+            && !proof.baselinePIDs.contains(proof.processID)
+            && proof.bundleIdentifier == BrowserKind.chrome.bundleIdentifier
+            && proof.applicationURL?.standardizedFileURL == proof.expectedApplicationURL.standardizedFileURL
+            && proof.executableURL?.standardizedFileURL == proof.expectedExecutableURL.standardizedFileURL
+            && proof.processArguments == ["--user-data-dir=\(proof.profileURL.path)",
+                                          "--no-first-run", "--no-default-browser-check",
+                                          proof.canaryURL]
+    }
+
+    private static func ownsRunningChrome(_ process: Process,
+                                         chrome: NSRunningApplication,
+                                         proof: IsolatedChromeLaunchProof) -> Bool {
+        process.isRunning && !chrome.isTerminated
+            && proof.processID == process.processIdentifier
+            && proof.processID == chrome.processIdentifier
+            && provesIsolatedChromeOwnership(proof)
+            && chrome.bundleIdentifier == BrowserKind.chrome.bundleIdentifier
+            && chrome.bundleURL?.standardizedFileURL == proof.expectedApplicationURL.standardizedFileURL
+            && chrome.executableURL?.standardizedFileURL == proof.expectedExecutableURL.standardizedFileURL
+    }
+
+    private static func waitForOwnedChromeReadiness(
+        maxSamples: Int = 100,
+        ownsProcess: () -> Bool,
+        isReady: () throws -> Bool,
+        pause: () -> Void = { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+    ) throws -> Bool {
+        for sample in 0..<maxSamples {
+            guard ownsProcess() else { return false }
+            do {
+                if try isReady() { return ownsProcess() }
+            } catch ChromiumCapture.Failure.needsConsent {
+                throw ChromiumCapture.Failure.needsConsent
+            } catch ChromiumCapture.Failure.unavailable {
+                // A registered app can still reject Apple Events during startup.
+            }
+            if sample + 1 < maxSamples { pause() }
+        }
+        return false
+    }
+
+    private static func waitForOwnedNormalCanaryCapture(
+        expectedURL: String,
+        maxSamples: Int = 100,
+        ownsProcess: () -> Bool,
+        capture: () throws -> String,
+        pause: () -> Void = { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+    ) throws -> (ready: Bool, observations: Set<NormalCanaryObservation>) {
+        var observations: Set<NormalCanaryObservation> = []
+        let ready = try waitForOwnedChromeReadiness(maxSamples: maxSamples, ownsProcess: ownsProcess, isReady: {
+            let value = try capture()
+            let observation: NormalCanaryObservation
+            if value == expectedURL { observation = .exact }
+            else if value.isEmpty { observation = .empty }
+            else if value == "about:blank" { observation = .bareBlank }
+            else { observation = .unexpected }
+            observations.insert(observation)
+            guard observation != .unexpected else { throw NormalCanaryFailure.unexpectedContent }
+            return observation == .exact
+        }, pause: pause)
+        return (ready, observations)
+    }
+
+    private static func gracefullyTerminateOwnedChrome(_ process: Process,
+                                                       chrome: NSRunningApplication,
+                                                       proof: IsolatedChromeLaunchProof) -> Bool {
+        var terminationRequested = false
+        for _ in 0..<100 {
+            if !process.isRunning && chrome.isTerminated { return true }
+            if process.isRunning && !chrome.isTerminated {
+                guard ownsRunningChrome(process, chrome: chrome, proof: proof) else { return false }
+                if !terminationRequested, chrome.isFinishedLaunching, chrome.activationPolicy == .regular {
+                    terminationRequested = chrome.terminate()
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return chrome.isTerminated && !process.isRunning
+    }
+
+    private static func makeSetNormalCanaryEvent(
+        processID: pid_t, target: ChromiumCapture.ActiveTabMetadata, url: String
+    ) throws -> NSAppleEventDescriptor {
+        guard processID > 0, target.mode == "normal",
+              let tabID = target.activeTabID, let tabNumber = Int32(tabID), tabNumber > 0,
+              let windowNumber = Int32(target.windowID), windowNumber > 0,
+              String(tabNumber) == tabID, String(windowNumber) == target.windowID,
+              url == "about:blank#browserdaddy-private-recovery-20261026" else {
+            throw ChromiumCapture.Failure.unavailable
+        }
+        let window = try ChromiumCapture.object("cwin", form: formUniqueID,
+                                                key: NSAppleEventDescriptor(int32: windowNumber), container: .null())
+        let tab = try ChromiumCapture.object("CrTb", form: formUniqueID,
+                                             key: NSAppleEventDescriptor(int32: tabNumber), container: window)
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
+                                           eventID: AEEventID(kAESetData),
+                                           targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
+                                           returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(try ChromiumCapture.property("URL ", of: tab), forKeyword: AEKeyword(keyDirectObject))
+        event.setParam(NSAppleEventDescriptor(string: url), forKeyword: AEKeyword(keyAEData))
+        return event
+    }
+
+    private static func createIncognitoWindow(processID: pid_t) throws {
+        let event = makeIncognitoWindowEvent(processID: processID)
+        let reply = try event.sendEvent(options: ChromiumCapture.sendOptions, timeout: 3)
+        if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)), error.int32Value != 0 {
+            if error.int32Value == errAEEventNotPermitted || error.int32Value == errAEEventWouldRequireUserConsent {
+                throw ChromiumCapture.Failure.needsConsent
+            }
+            throw RuntimeProbeError.script(number: Int(error.int32Value))
+        }
+    }
+
+    private static func makeIncognitoWindowEvent(processID: pid_t) -> NSAppleEventDescriptor {
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
+                                           eventID: AEEventID(kAECreateElement),
+                                           targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
+                                           returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(NSAppleEventDescriptor(typeCode: ChromiumCapture.code("cwin")),
+                       forKeyword: AEKeyword(keyAEObjectClass))
+        let properties = NSAppleEventDescriptor.record()
+        properties.setDescriptor(NSAppleEventDescriptor(string: "incognito"),
+                                 forKeyword: AEKeyword(ChromiumCapture.code("mode")))
+        event.setParam(properties, forKeyword: AEKeyword(ChromiumCapture.code("prdt")))
+        return event
+    }
+
+    private static func setWindowToFront(processID: pid_t, windowID: String) throws {
+        let event = try makeSetWindowToFrontEvent(processID: processID, windowID: windowID)
+        let reply = try event.sendEvent(options: ChromiumCapture.sendOptions, timeout: 3)
+        if let error = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber)), error.int32Value != 0 {
+            if error.int32Value == errAEEventNotPermitted || error.int32Value == errAEEventWouldRequireUserConsent {
+                throw ChromiumCapture.Failure.needsConsent
+            }
+            throw RuntimeProbeError.script(number: Int(error.int32Value))
+        }
+    }
+
+    private static func makeSetWindowToFrontEvent(processID: pid_t,
+                                                   windowID: String) throws -> NSAppleEventDescriptor {
+        guard let identifier = Int(windowID), identifier > 0 else {
+            throw RuntimeProbeError.script(number: nil)
+        }
+        let window = try ChromiumCapture.object("cwin", form: formUniqueID,
+                                                key: NSAppleEventDescriptor(string: windowID),
+                                                container: .null())
+        let index = try ChromiumCapture.property("pidx", of: window)
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite),
+                                           eventID: AEEventID(kAESetData),
+                                           targetDescriptor: NSAppleEventDescriptor(processIdentifier: processID),
+                                           returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(index, forKeyword: AEKeyword(keyDirectObject))
+        event.setParam(NSAppleEventDescriptor(int32: 1), forKeyword: AEKeyword(keyAEData))
+        return event
     }
 
     private func runExternalNormalCanary(phase: String, environment: [String: String]) throws {
@@ -1558,6 +2219,205 @@ final class PrivateWindowRuntimeTests: XCTestCase {
         XCTFail(
             "Native foreground preflight failed checks: \(failures); expectedPID=\(chrome.processIdentifier), observedSelectedPID=\(selectedPID), observedTopWindowPID=\(topWindowPID), expectedWindowID=\(controlledWindowID), observedCaptureWindowID=\(captureWindowID); \(skippedCapture)"
         )
+    }
+
+    func testOwnedChromeReadinessWaitsThroughStartupRefusal() throws {
+        var samples = 0
+        let ready = try Self.waitForOwnedChromeReadiness(maxSamples: 3, ownsProcess: { true }, isReady: {
+            samples += 1
+            if samples == 1 { throw ChromiumCapture.Failure.unavailable }
+            return samples == 3
+        }, pause: {})
+        XCTAssertTrue(ready)
+        XCTAssertEqual(samples, 3)
+    }
+
+    func testOwnedNormalCanaryWaitsForExactContentWithoutAcceptingBareBlank() throws {
+        let expected = "about:blank#browserdaddy-fixture"
+        var samples = ["", "about:blank", expected]
+        let result = try Self.waitForOwnedNormalCanaryCapture(expectedURL: expected, maxSamples: 3,
+                                                             ownsProcess: { true }, capture: {
+            samples.removeFirst()
+        }, pause: {})
+        XCTAssertTrue(result.ready)
+        XCTAssertEqual(result.observations, [.empty, .bareBlank, .exact])
+        let stalled = try Self.waitForOwnedNormalCanaryCapture(expectedURL: expected, maxSamples: 2,
+                                                              ownsProcess: { true }, capture: { "about:blank" },
+                                                              pause: {})
+        XCTAssertFalse(stalled.ready)
+        XCTAssertEqual(stalled.observations, [.bareBlank])
+    }
+
+    func testOwnedNormalCanaryStopsOnUnexpectedContentOrChangedTarget() {
+        var samples = 0
+        XCTAssertThrowsError(try Self.waitForOwnedNormalCanaryCapture(expectedURL: "about:blank#canary",
+                                                                     ownsProcess: { true }, capture: {
+            samples += 1
+            return "https://example.invalid/not-the-canary"
+        }, pause: {}))
+        XCTAssertEqual(samples, 1)
+        XCTAssertThrowsError(try Self.waitForOwnedNormalCanaryCapture(expectedURL: "about:blank#canary",
+                                                                     ownsProcess: { true }, capture: {
+            samples += 1
+            throw NormalCanaryFailure.targetChanged
+        }, pause: {}))
+        XCTAssertEqual(samples, 2)
+    }
+
+    func testOwnedChromeReadinessStopsBeforeReadingAfterOwnershipLoss() throws {
+        var owned = true
+        var samples = 0
+        let ready = try Self.waitForOwnedChromeReadiness(ownsProcess: { owned }, isReady: {
+            samples += 1
+            owned = false
+            return false
+        }, pause: {})
+        XCTAssertFalse(ready)
+        XCTAssertEqual(samples, 1)
+        XCTAssertFalse(try Self.waitForOwnedChromeReadiness(ownsProcess: { owned }, isReady: {
+            XCTFail("Unknown process must not receive a readiness probe")
+            return true
+        }, pause: {}))
+    }
+
+    func testOwnedChromeReadinessDoesNotRetryConsentDenial() {
+        var samples = 0
+        XCTAssertThrowsError(try Self.waitForOwnedChromeReadiness(ownsProcess: { true }, isReady: {
+            samples += 1
+            throw ChromiumCapture.Failure.needsConsent
+        }, pause: {})) { error in
+            guard case ChromiumCapture.Failure.needsConsent = error else {
+                return XCTFail("Consent denial must remain explicit")
+            }
+        }
+        XCTAssertEqual(samples, 1)
+    }
+
+    func testOwnedChromeReadinessTimesOutAndRechecksOwnershipBeforeSuccess() throws {
+        var samples = 0
+        XCTAssertFalse(try Self.waitForOwnedChromeReadiness(maxSamples: 2, ownsProcess: { true }, isReady: {
+            samples += 1
+            return false
+        }, pause: {}))
+        XCTAssertEqual(samples, 2)
+
+        var owned = true
+        XCTAssertFalse(try Self.waitForOwnedChromeReadiness(ownsProcess: { owned }, isReady: {
+            owned = false
+            return true
+        }, pause: {}))
+    }
+
+    func testIsolatedChromeOwnershipRequiresFreshExactAppAndProfileArguments() {
+        let applicationURL = URL(fileURLWithPath: "/Applications/Google Chrome.app", isDirectory: true)
+        let executableURL = applicationURL.appendingPathComponent("Contents/MacOS/Google Chrome")
+        let profileURL = URL(fileURLWithPath: "/tmp/BrowserDaddy-private-recovery-fixture", isDirectory: true)
+        let canaryURL = "about:blank#browserdaddy-private-recovery-20261026"
+        func proof(pid: pid_t = 720,
+                   bundleID: String? = BrowserKind.chrome.bundleIdentifier,
+                   appURL: URL? = applicationURL,
+                   executable: URL? = executableURL,
+                   arguments: [String] = ["--user-data-dir=/tmp/BrowserDaddy-private-recovery-fixture",
+                                          "--no-first-run", "--no-default-browser-check",
+                                          "about:blank#browserdaddy-private-recovery-20261026"])
+            -> IsolatedChromeLaunchProof {
+            IsolatedChromeLaunchProof(processID: pid, bundleIdentifier: bundleID,
+                                      applicationURL: appURL, executableURL: executable,
+                                      expectedExecutableURL: executableURL,
+                                      expectedApplicationURL: applicationURL,
+                                      baselinePIDs: [719], processArguments: arguments,
+                                      profileURL: profileURL, canaryURL: canaryURL)
+        }
+        let valid = proof()
+        XCTAssertTrue(Self.provesIsolatedChromeOwnership(valid))
+        XCTAssertFalse(Self.provesIsolatedChromeOwnership(proof(pid: 719)))
+        XCTAssertFalse(Self.provesIsolatedChromeOwnership(proof(bundleID: "org.chromium.Chromium")))
+        XCTAssertFalse(Self.provesIsolatedChromeOwnership(proof(appURL: URL(fileURLWithPath: "/Applications/Other Chrome.app"))))
+        XCTAssertFalse(Self.provesIsolatedChromeOwnership(proof(executable: URL(fileURLWithPath: "/Applications/Other Chrome"))))
+        XCTAssertFalse(Self.provesIsolatedChromeOwnership(proof(arguments: ["--user-data-dir=/tmp/owner-profile", canaryURL])))
+    }
+
+    func testIncognitoCreationEventTargetsExactPIDAndSetsOnlyWindowMode() throws {
+        let processID = pid_t(829)
+        let event = Self.makeIncognitoWindowEvent(processID: processID)
+        XCTAssertEqual(event.eventClass, AEEventClass(kAECoreSuite))
+        XCTAssertEqual(event.eventID, AEEventID(kAECreateElement))
+        let expectedAddress = NSAppleEventDescriptor(processIdentifier: processID)
+        XCTAssertEqual(try XCTUnwrap(event.attributeDescriptor(forKeyword: keyAddressAttr)).data,
+                       expectedAddress.data)
+        XCTAssertEqual(try XCTUnwrap(event.paramDescriptor(forKeyword: AEKeyword(keyAEObjectClass))).typeCodeValue,
+                       ChromiumCapture.code("cwin"))
+        let properties = try XCTUnwrap(event.paramDescriptor(forKeyword: AEKeyword(ChromiumCapture.code("prdt"))))
+        XCTAssertEqual(properties.numberOfItems, 1)
+        XCTAssertEqual(properties.forKeyword(AEKeyword(ChromiumCapture.code("mode")))?.stringValue,
+                       "incognito")
+    }
+
+    func testPrivateRecoverySequenceRequiresOneUnchangedNormalAndOnePrivateWindow() throws {
+        let normal = ExternalWindowSnapshot(windowID: 42, mode: "normal",
+                                            tabIDs: [10, 11], activeTabID: 11)
+        let before = ExternalTabSnapshot(processID: 720, selectedPID: 720,
+                                         topWindowPID: 720, windows: [normal])
+        let privateWindow = ExternalWindowSnapshot(windowID: 43, mode: "incognito",
+                                                   tabIDs: nil, activeTabID: nil)
+        let valid = ExternalTabSnapshot(processID: 720, selectedPID: 720,
+                                        topWindowPID: 720, windows: [privateWindow, normal])
+        XCTAssertTrue(Self.hasOnlyAddedPrivateWindow(before: before, after: valid))
+
+        let privateIdentityLeak = ExternalTabSnapshot(
+            processID: 720, selectedPID: 720, topWindowPID: 720,
+            windows: [ExternalWindowSnapshot(windowID: 43, mode: "incognito",
+                                             tabIDs: [99], activeTabID: 99), normal])
+        XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: privateIdentityLeak))
+
+        let staleNormalTarget = ExternalTabSnapshot(
+            processID: 720, selectedPID: 720, topWindowPID: 720,
+            windows: [privateWindow,
+                      ExternalWindowSnapshot(windowID: 42, mode: "normal",
+                                             tabIDs: [10, 11, 12], activeTabID: 12)])
+        XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: staleNormalTarget))
+
+        let extraWindow = ExternalTabSnapshot(
+            processID: 720, selectedPID: 720, topWindowPID: 720,
+            windows: [privateWindow, normal,
+                      ExternalWindowSnapshot(windowID: 44, mode: "normal",
+                                             tabIDs: [20], activeTabID: 20)])
+        XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: extraWindow))
+
+        let duplicateWindowIDs = ExternalTabSnapshot(
+            processID: 720, selectedPID: 720, topWindowPID: 720,
+            windows: [normal, normal])
+        XCTAssertFalse(Self.hasOnlyAddedPrivateWindow(before: before, after: duplicateWindowIDs))
+    }
+
+    func testNormalCanarySetupPinsPIDWindowAndTabAndRejectsPrivateTargets() throws {
+        let target = ChromiumCapture.ActiveTabMetadata(windowID: "42", mode: "normal", activeTabID: "9")
+        let url = "about:blank#browserdaddy-private-recovery-20261026"
+        let event = try Self.makeSetNormalCanaryEvent(processID: 829, target: target, url: url)
+        XCTAssertEqual(event.eventID, AEEventID(kAESetData))
+        XCTAssertEqual(event.attributeDescriptor(forKeyword: keyAddressAttr)?.data,
+                       NSAppleEventDescriptor(processIdentifier: 829).data)
+        XCTAssertEqual(event.paramDescriptor(forKeyword: AEKeyword(keyAEData))?.stringValue, url)
+        let property = try XCTUnwrap(event.paramDescriptor(forKeyword: keyDirectObject))
+        XCTAssertEqual(property.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue, ChromiumCapture.code("URL "))
+        let tab = try XCTUnwrap(property.forKeyword(AEKeyword(keyAEContainer)))
+        XCTAssertEqual(tab.forKeyword(AEKeyword(keyAEKeyData))?.int32Value, 9)
+        let window = try XCTUnwrap(tab.forKeyword(AEKeyword(keyAEContainer)))
+        XCTAssertEqual(window.forKeyword(AEKeyword(keyAEKeyData))?.int32Value, 42)
+        for mode in ["incognito", "unknown"] {
+            XCTAssertThrowsError(try Self.makeSetNormalCanaryEvent(processID: 829,
+                target: .init(windowID: "42", mode: mode, activeTabID: "9"), url: url))
+        }
+        XCTAssertThrowsError(try Self.makeSetNormalCanaryEvent(processID: 829, target: target, url: "https://example.invalid"))
+    }
+
+    func testWindowSelectionEventUsesCanonicalCoreSetEvent() throws {
+        let setWindowEvent = try Self.makeSetWindowToFrontEvent(processID: 829, windowID: "42")
+        XCTAssertEqual(setWindowEvent.eventClass, AEEventClass(kAECoreSuite))
+        XCTAssertEqual(setWindowEvent.eventID, AEEventID(kAESetData))
+        XCTAssertNotNil(setWindowEvent.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)))
+        XCTAssertEqual(setWindowEvent.paramDescriptor(forKeyword: AEKeyword(keyAEData))?.int32Value, 1)
+        XCTAssertThrowsError(try Self.makeSetWindowToFrontEvent(processID: 829, windowID: "00"))
     }
 
     func testForegroundPreflightWaitsForMetadataConvergence() {

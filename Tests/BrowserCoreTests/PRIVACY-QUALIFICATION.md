@@ -5,9 +5,10 @@ access. A skipped, failed or setup-blocked attempt is never a privacy pass.
 No test requests Automation access, opens the owner archive, imports history,
 changes browser settings, invokes classification, or prints tab URLs/titles.
 
-The current automatic harness is normal-only. Private and recovery modes
-deliberately skip, so they are not runnable qualification stages. Do not run
-them against owner windows or interpret their skips as privacy evidence.
+The ordinary `normal` mode uses a controlled canary in the already-front
+normal Chrome window. Private/recovery qualification uses a separate
+test-owned Chrome process and UUID profile; it never probes an owner window or
+profile.
 
 Normal mode uses one controlled tab in the already-front normal Chrome window
 with this inert canary URL:
@@ -22,10 +23,65 @@ Run: `BROWSERDADDY_PRIVACY_MODE=normal swift test --filter PrivateWindowRuntimeT
 
 Normal qualification requires the exact canary in real capture and routing
 output. A denied-consent or foreground-identity failure stops before content;
-it is not a normal capture pass. Live private/recovery qualification needs an
-isolated task-owned browser process and remains an explicit coverage limit.
-Deterministic tests cover private/unknown exclusion, inventory ordering and
-focus carry-forward; they are not live-browser privacy proof.
+it is not a normal capture pass. Deterministic tests cover private/unknown
+exclusion, inventory ordering and focus carry-forward; they are not
+live-browser privacy proof.
+
+The opt-in `private` and `recovery` modes run one combined sequence:
+
+1. Resolve the exact installed Chrome app and executable, record existing
+   Chrome process IDs, create a unique temporary profile, and launch that
+   executable directly with the profile and fixed `about:blank` canary. The
+   retained `Process` handle must remain live at the fresh PID, and
+   `NSRunningApplication` must report the same PID, bundle and executable.
+   Ownership requires the live retained child and exact native app identity;
+   the argument check validates the intended launch recipe. Any process exit,
+   forwarding or identity ambiguity stops before
+   browser metadata or content reads. The argument vector is launch provenance
+   from the retained child handle, not an OS read-back of live argv.
+   Registration alone is not launch readiness. While the same owned child
+   remains live, wait for Chrome to finish launching as a regular application
+   and for the non-prompting metadata reader to become available. Consent
+   denial stops immediately; startup refusal and readiness waits are bounded.
+2. Require the selected app and top ordinary window to belong to that fresh
+   process. Establish the fixed canary explicitly in the exact owned normal
+   window/tab using a PID-addressed, non-prompting set event: Chrome startup
+   selection alone does not prove the command-line URL became its active tab.
+   Private/unknown targets and arbitrary URLs cannot receive this setup event.
+   Wait for the exact normal canary while the same window and tab
+   remain selected. Empty capture and bare `about:blank` may still be loading;
+   neither qualifies as the canary. Unexpected content, consent denial or a
+   changed target stops the sequence. Diagnostics report only fixed observation
+   categories, never captured values. Then create one incognito window using a
+   PID-addressed Apple Event. The metadata snapshot records only window IDs,
+   modes and normal-window tab IDs. Incognito tab IDs, URLs and titles are
+   never requested. The production focus reader must return app-only state.
+3. Bring the original normal window forward using its exact window ID and a
+   PID-addressed event. Require the same normal window and tab identity, then
+   verify that capture resumes for the fixed canary.
+
+Run: `BROWSERDADDY_PRIVACY_MODE=private swift test --filter PrivateWindowRuntimeTests/testChromeWindowPrivacyAtTheActualCaptureBoundaries`.
+`BROWSERDADDY_PRIVACY_MODE=recovery` runs the same combined sequence. Both
+require existing Chrome Automation consent and never request it. Initial
+consent denial skips before metadata/content reads. A denial during later
+setup or recovery stops with a skip or failure; neither qualifies as a pass.
+The exact UUID profile is retained at the
+reported temporary path for owner review. The harness requests graceful
+quit via `NSRunningApplication.terminate()` only while the retained direct
+`Process` handle is live and its PID and app identity still match; it never
+removes the profile. If app identity
+remains valid during startup, cleanup waits for launch readiness and retries
+an initially refused graceful termination within a bounded interval. If identity
+cannot be proven while the child remains live, it leaves that child alone and
+reports its PID rather than risking a signal to an unverified process. A missing
+permission, unsupported app launch behavior, ownership mismatch, foreground
+mismatch or ambiguous window delta is a failed or skipped qualification, never
+a pass.
+
+The private/recovery mode proves this capture sequence only. It does not
+qualify browser relaunch, restoration after process exit, the installed
+BrowserDaddy package, sandbox/TCC equivalence, or the required ordinary-use
+diary periods.
 
 This qualifies capture kernels in the test executable. It does not establish
 installed-package identity, sandbox/TCC equivalence or full sampler behavior.
