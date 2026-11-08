@@ -19,7 +19,7 @@ final class BrowserDaddyAppDelegate: NSObject, NSApplicationDelegate {
         guard !BrowserStartupCheck.enabled else { return }
         for delay in [0.8, 2.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard BrowserDaddyRuntime.startup.model?.needsOnboarding == true,
+                guard (BrowserDaddyRuntime.startup.model?.needsOnboarding == true || CommandLine.arguments.contains("--preview-fixture")),
                       let open = WindowReopener.shared.openWindow,
                       !NSApplication.shared.windows.contains(where: { $0.isVisible })
                 else { return }
@@ -272,7 +272,7 @@ struct BrowserDaddyApp: App {
         // Never create this window on launch — a GURL-launched copy is a
         // routing pipe, not a UI session. It exists only after an explicit
         // open (menu item, Dock/⌘-tab reopen).
-        mainWindow.defaultLaunchBehavior(BrowserStartupCheck.enabled ? .presented : .suppressed)
+        mainWindow.defaultLaunchBehavior(BrowserStartupCheck.enabled || CommandLine.arguments.contains("--preview-fixture") ? .presented : .suppressed)
 
         Settings {
             Group {
@@ -343,7 +343,7 @@ struct BrowserDaddyApp: App {
 
 enum Workspace: String, CaseIterable, Identifiable {
     case attention = "Attention", tabs = "Tabs", dashboard = "Dashboard",
-         history = "History", router = "Router", permissions = "Permissions"
+         history = "History", router = "Router", blocking = "Blocking", permissions = "Permissions"
     var id: String { rawValue }
     var icon: String {
         switch self {
@@ -352,6 +352,7 @@ enum Workspace: String, CaseIterable, Identifiable {
         case .dashboard: return "chart.bar.xaxis"
         case .history: return "clock.arrow.circlepath"
         case .router: return "link.circle"
+        case .blocking: return "shield"
         case .permissions: return "lock.shield"
         }
     }
@@ -363,7 +364,7 @@ struct RootView: View {
 
     init() {
         _workspace = State(initialValue: CommandLine.arguments.contains("--preview-fixture")
-                           ? .history : .attention)
+                           ? (CommandLine.arguments.contains("--preview-blocking") ? .blocking : .history) : .attention)
     }
 
     var body: some View {
@@ -412,6 +413,7 @@ struct RootView: View {
                 navigationItem(.history)
                 navigationHeading("SETUP").padding(.top, 9)
                 navigationItem(.router)
+                navigationItem(.blocking)
                 navigationItem(.permissions)
             }
 
@@ -456,6 +458,7 @@ struct RootView: View {
         case .dashboard: DashboardView()
         case .history: HistoryView()
         case .router: RouterView()
+        case .blocking: BlockingView()
         case .permissions: PermissionsView()
         }
     }
@@ -495,6 +498,7 @@ struct RootView: View {
         case .dashboard: "Unified browsing archive"
         case .history: "Every visit, every browser"
         case .router: "Where links open"
+        case .blocking: "Local site and category rules"
         case .permissions: "Access and grants"
         }
     }

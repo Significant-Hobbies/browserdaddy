@@ -1,0 +1,10 @@
+{
+  "source": "https://github.com/ShadowWhisperer/BlockLists",
+  "revision": "d2f40839326e42e6d6178eb6171c039156cf6e66",
+  "license": "Unlicense",
+  "files": {
+    "Adult.txt": "4eb9d0d020d546521c4d90485d7c423f6fbb1336e880d003fd08dcce5c7675d3",
+    "Gambling.txt": "a0655a6a781fea5a8ecd5bf2b45e83cacd4b7b27350a34d58544de5d866cae2c",
+    "LICENSE.txt": "6b0382b16279f26ff69014300541967a356a666eb0b91b422f6862f6b7dad17e"
+  }
+}

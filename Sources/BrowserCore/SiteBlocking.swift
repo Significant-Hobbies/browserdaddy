@@ -38,6 +38,8 @@ public struct BlockingHostname: Hashable, Codable, Sendable {
 public enum BlockingCategory: String, CaseIterable, Codable, Sendable {
     case adult
     case gambling
+
+    public var title: String { self == .adult ? "Adult content" : "Gambling" }
 }
 
 public struct SiteBlockingRules: Sendable {
