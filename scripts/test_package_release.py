@@ -142,6 +142,20 @@ class ResourcePackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "requires both"):
                     namespace["main"]()
 
+    def test_filter_signature_requires_developer_id_and_expected_team(self):
+        validate = runpy.run_path(str(SCRIPTS / "package-release.py"))["validate_filter_signature"]
+        for output, accepted in [
+            ("Signature=adhoc\nTeamIdentifier=not set\n", False),
+            ("Authority=Developer ID Application: Example\nTeamIdentifier=OTHERTEAM\n", False),
+            ("Authority=Developer ID Application: Example\nTeamIdentifier=8F7LXHTJZR\n", True),
+        ]:
+            with self.subTest(output=output), patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", output)):
+                if accepted:
+                    validate(Path("synthetic.app"))
+                else:
+                    with self.assertRaises(SystemExit):
+                        validate(Path("synthetic.app"))
+
     def test_local_assembly_copies_bundle_and_fails_when_missing(self):
         for missing in (False, True):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as folder:

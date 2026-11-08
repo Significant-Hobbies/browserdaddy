@@ -3,7 +3,7 @@ import BrowserCore
 import SwiftUI
 
 struct BlockingView: View {
-    @StateObject private var controller = BlockingController()
+    @StateObject private var controller = BlockingController.shared
     @State private var site = ""
 
     var body: some View {
@@ -55,6 +55,7 @@ struct BlockingView: View {
                             .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
                     }
                 }
+                .disabled(!controller.ready || controller.busy)
                 BrowserBand(label: "SITES", subtitle: "A domain rule also blocks its subdomains") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -79,11 +80,12 @@ struct BlockingView: View {
                         }
                     }
                 }
+                .disabled(!controller.ready || controller.busy)
                 BrowserBand(label: "COVERAGE & PRIVACY", subtitle: "Rules are not a guarantee of complete protection") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("The filter applies to identifiable connections in regular and private windows, and other apps. It does not save visited domains, URLs or a blocked-visit log.")
                         Text("Unknown domains and connections without an exposed hostname are allowed. Encrypted DNS, VPNs, connection reuse and browser networking can limit coverage. Sites missing from these lists, and adult content on shared sites, may remain accessible.")
-                        Text("Cross-browser protection has not been verified on this Mac. Rule changes apply to new connections within a few seconds; existing connections may continue until closed.")
+                        Text("Cross-browser protection has not been verified on this Mac. Saved rule changes are sent to macOS when the filter is configured. Delivery and enforcement require runtime verification; existing connections may continue until closed.")
                     }.font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                 }
             }

@@ -28,12 +28,27 @@ final class BlockingConfigurationTests: XCTestCase {
         XCTAssertEqual(try BlockingConfiguration.parseList("EXAMPLE.COM\nexample.com\n").count, 1)
     }
 
+    func testProviderPayloadCarriesRulesWithoutAUserContainerPath() throws {
+        var config = BlockingConfiguration()
+        config.categories = [.gambling]
+        config.lists[.gambling] = try BlockingConfiguration.parseList("bet.test")
+        let payload = try config.providerData()
+        XCTAssertEqual(try BlockingConfiguration.decode(payload), config)
+        XCTAssertEqual(try BlockingConfiguration.decode(payload).rules.decision(for: "www.bet.test"), .blocked)
+        XCTAssertThrowsError(try BlockingConfiguration.decode(Data(repeating: 0, count: BlockingConfiguration.maximumProviderBytes + 1)))
+        XCTAssertThrowsError(try BlockingConfiguration.decode(Data("{}".utf8)))
+    }
+
     func testBundledListsAreUsableAndNonempty() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/BrowserDaddy/Resources/BlockingLists")
+        var config = BlockingConfiguration()
         for name in ["Adult", "Gambling"] {
             let contents = try String(contentsOf: root.appendingPathComponent(name + ".txt"), encoding: .utf8)
-            XCTAssertGreaterThan(try BlockingConfiguration.parseList(contents).count, 100)
+            let hosts = try BlockingConfiguration.parseList(contents)
+            XCTAssertGreaterThan(hosts.count, 100)
+            config.lists[name == "Adult" ? .adult : .gambling] = hosts
         }
+        XCTAssertLessThan(try config.providerData().count, BlockingConfiguration.maximumProviderBytes)
     }
 }

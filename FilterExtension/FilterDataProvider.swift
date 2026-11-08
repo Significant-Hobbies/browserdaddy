@@ -4,42 +4,35 @@ import NetworkExtension
 final class FilterDataProvider: NEFilterDataProvider {
     private let lock = NSLock()
     private var configuration = BlockingConfiguration()
-    private var timer: DispatchSourceTimer?
-    private var rulesURL: URL?
-    private var modified: Date?
+    private var configurationObservation: NSKeyValueObservation?
+    private let rulesQueue = DispatchQueue(label: "BrowserDaddy.filter.configuration")
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
-        guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group) else {
-            completionHandler(CocoaError(.fileReadNoPermission))
-            return
-        }
-        rulesURL = root.appendingPathComponent(BlockingConfiguration.filename)
         do {
-            try reload()
-            let source = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "BrowserDaddy.filter.rules"))
-            source.schedule(deadline: .now() + 1, repeating: 1)
-            source.setEventHandler { [weak self] in try? self?.reload() }
-            timer = source
-            source.resume()
+            configurationObservation = observe(\.filterConfiguration, options: [.new]) { [weak self] _, _ in
+                self?.rulesQueue.async { [weak self] in try? self?.reload() }
+            }
+            try rulesQueue.sync { try reload() }
             completionHandler(nil)
-        } catch { completionHandler(error) }
+        } catch {
+            configurationObservation = nil
+            completionHandler(error)
+        }
     }
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        timer?.cancel()
-        timer = nil
+        configurationObservation = nil
         completionHandler()
     }
 
     private func reload() throws {
-        guard let rulesURL else { throw CocoaError(.fileNoSuchFile) }
-        let date = try rulesURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        guard modified == nil || date != modified else { return }
-        let next = try BlockingConfiguration.load(from: rulesURL)
+        guard let data = filterConfiguration.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let next = try BlockingConfiguration.decode(data)
         lock.lock()
         configuration = next
         lock.unlock()
-        modified = date
     }
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {

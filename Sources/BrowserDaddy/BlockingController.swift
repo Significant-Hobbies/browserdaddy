@@ -6,6 +6,11 @@ import SwiftUI
 
 @MainActor
 final class BlockingController: NSObject, ObservableObject, OSSystemExtensionRequestDelegate {
+    static let shared = BlockingController()
+    @Published private(set) var ready = false
+    private var pendingApproval = false
+    private var activationRequest: OSSystemExtensionRequest?
+    private var payload: Data?
     @Published private(set) var configuration = BlockingConfiguration()
     @Published private(set) var status = "Checking filter…"
     @Published private(set) var enabled = false
@@ -15,33 +20,48 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     private var rulesURL: URL?
     private var manager: NEFilterManager { .shared() }
 
-    override init() {
-        preview = CommandLine.arguments.contains("--preview-fixture")
-            || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true
+    init(rulesURL suppliedURL: URL? = nil, preview suppliedPreview: Bool? = nil) {
+        preview = suppliedPreview ?? (CommandLine.arguments.contains("--preview-fixture")
+            || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true)
         super.init()
-        do {
-            if preview {
-                rulesURL = FileManager.default.temporaryDirectory.appendingPathComponent("BrowserDaddy-blocking-preview-\(UUID().uuidString).json")
-            } else {
-                rulesURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
-                    .appendingPathComponent(BlockingConfiguration.filename)
-            }
-            guard let rulesURL else { throw CocoaError(.fileNoSuchFile) }
-            if FileManager.default.fileExists(atPath: rulesURL.path) {
-                configuration = try BlockingConfiguration.load(from: rulesURL)
-            } else {
-                configuration.categories = [.adult, .gambling]
-                for category in BlockingCategory.allCases {
-                    let name = category == .adult ? "Adult" : "Gambling"
-                    guard let url = Bundle.module.url(forResource: name, withExtension: "txt") else {
-                        throw CocoaError(.fileNoSuchFile)
+        rulesURL = suppliedURL ?? (preview
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("BrowserDaddy-blocking-preview-\(UUID().uuidString).json")
+            : FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
+                .appendingPathComponent(BlockingConfiguration.filename))
+        let url = rulesURL
+        status = "Loading local rules…"
+        busy = true
+        Task {
+            do {
+                let (loaded, data) = try await Task.detached(priority: .userInitiated) {
+                    guard let url else { throw CocoaError(.fileNoSuchFile) }
+                    var loaded = BlockingConfiguration()
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        loaded = try BlockingConfiguration.load(from: url)
+                    } else {
+                        loaded.categories = [.adult, .gambling]
+                        for category in BlockingCategory.allCases {
+                            let name = category == .adult ? "Adult" : "Gambling"
+                            guard let resource = Bundle.module.url(forResource: name, withExtension: "txt") else {
+                                throw CocoaError(.fileNoSuchFile)
+                            }
+                            loaded.lists[category] = try BlockingConfiguration.parseList(String(contentsOf: resource, encoding: .utf8))
+                        }
+                        try loaded.save(to: url)
                     }
-                    configuration.lists[category] = try BlockingConfiguration.parseList(String(contentsOf: url, encoding: .utf8))
-                }
-                try configuration.save(to: rulesURL)
+                    return (loaded, try loaded.providerData())
+                }.value
+                configuration = loaded
+                payload = data
+                ready = true
+                busy = false
+                refresh()
+            } catch {
+                busy = false
+                self.error = "Could not load local blocking rules. Editing is disabled to preserve the saved file: \(error.localizedDescription)"
+                status = "Rules unavailable · saved file preserved"
             }
-        } catch { self.error = "Could not load local blocking rules: \(error.localizedDescription)" }
-        refresh()
+        }
     }
 
     var extensionBundled: Bool {
@@ -49,6 +69,8 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func refresh() {
+        guard ready else { return }
+        guard !pendingApproval else { status = "Approve BrowserDaddy in System Settings → Login Items & Extensions"; return }
         guard !preview else { status = "Preview · filter inactive"; return }
         guard extensionBundled else { status = "Filter not installed in this build"; return }
         manager.loadFromPreferences { [weak self] failure in
@@ -63,15 +85,29 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func save(_ value: BlockingConfiguration) {
-        do {
-            guard let rulesURL else { throw CocoaError(.fileNoSuchFile) }
-            try value.save(to: rulesURL)
-            configuration = value
-            error = ""
-        } catch { self.error = "Rules were not saved: \(error.localizedDescription)" }
+        guard ready, !busy, let rulesURL else { return }
+        busy = true
+        Task {
+            do {
+                let data = try await Task.detached(priority: .userInitiated) {
+                    let data = try value.providerData()
+                    try value.save(to: rulesURL)
+                    return data
+                }.value
+                configuration = value
+                payload = data
+                error = ""
+                busy = false
+                if enabled { setEnabled(true) }
+            } catch {
+                busy = false
+                self.error = "Rules were not saved (maximum 16 MB): \(error.localizedDescription)"
+            }
+        }
     }
 
     func addSite(_ input: String) -> Bool {
+        guard ready, !busy else { return false }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let host = BlockingHostname(text) else {
             error = "Enter a domain such as example.com, without a path or scheme."
@@ -80,7 +116,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         var value = configuration
         value.sites.insert(host)
         save(value)
-        return configuration.sites.contains(host)
+        return true
     }
 
     func importList(_ category: BlockingCategory) {
@@ -89,29 +125,40 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         panel.allowsMultipleSelection = false
         panel.message = "Choose a UTF-8 domain list for \(category.title). One domain per line, or hosts-file format."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let access = url.startAccessingSecurityScopedResource()
-        defer { if access { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size <= 32 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-            let hosts = try BlockingConfiguration.parseList(String(contentsOf: url, encoding: .utf8))
-            var value = configuration
-            value.lists[category] = hosts
-            save(value)
-        } catch { self.error = "List was not imported. Use a nonempty domain or hosts list under 32 MB." }
+        guard ready, !busy else { return }
+        busy = true
+        Task {
+            do {
+                let hosts = try await Task.detached(priority: .userInitiated) {
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard size <= 32 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+                    return try BlockingConfiguration.parseList(String(contentsOf: url, encoding: .utf8))
+                }.value
+                var value = configuration
+                value.lists[category] = hosts
+                busy = false
+                save(value)
+            } catch {
+                busy = false
+                self.error = "List was not imported. Use a nonempty domain or hosts list under 32 MB."
+            }
+        }
     }
 
     func activate() {
-        guard !preview, extensionBundled, rulesURL != nil, !busy else { return }
+        guard !preview, ready, extensionBundled, !pendingApproval, !busy else { return }
         busy = true
         status = "Waiting for macOS approval…"
         let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: BlockingConfiguration.extensionID, queue: .main)
+        activationRequest = request
         request.delegate = self
         OSSystemExtensionManager.shared.submitRequest(request)
     }
 
     func setEnabled(_ value: Bool) {
-        guard !preview, !busy else { return }
+        guard !preview, ready, !busy, !pendingApproval, let payload else { return }
         busy = true
         manager.loadFromPreferences { [weak self] failure in
             Task { @MainActor in
@@ -123,6 +170,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                     return
                 }
                 let config = NEFilterProviderConfiguration()
+                config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
                 config.filterBrowsers = true
                 config.filterSockets = true
                 config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
@@ -138,20 +186,30 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
 
     private func finish(_ failure: Error?) {
         busy = false
-        if let failure { error = failure.localizedDescription }
+        if let failure { error = "Filter preferences were not updated; saved local rules may differ: \(failure.localizedDescription)" }
         refresh()
     }
 
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
-        Task { @MainActor in self.status = "Approve BrowserDaddy in System Settings → Login Items & Extensions" }
+        Task { @MainActor in
+            self.pendingApproval = true
+            self.busy = false
+            self.status = "Approve BrowserDaddy in System Settings → Login Items & Extensions"
+        }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties,
                             withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction { .replace }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
-        Task { @MainActor in self.finish(error) }
+        Task { @MainActor in
+            self.activationRequest = nil
+            self.pendingApproval = false
+            self.finish(error)
+        }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         Task { @MainActor in
+            self.activationRequest = nil
+            self.pendingApproval = false
             self.busy = false
             if result == .completed { self.setEnabled(true) }
             else { self.status = "Restart your Mac to finish installing the filter" }

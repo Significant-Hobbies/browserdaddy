@@ -4,6 +4,8 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static let group = "8F7LXHTJZR.com.significanthobbies.browserdaddy"
     public static let extensionID = "com.significanthobbies.browserdaddy.filter"
     public static let filename = "blocking-rules.json"
+    public static let providerRulesKey = "rules-v1"
+    public static let maximumProviderBytes = 16 * 1024 * 1024
     public var version = 1
     public var sites: Set<BlockingHostname> = []
     public var categories: Set<BlockingCategory> = []
@@ -18,15 +20,26 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static func load(from url: URL) throws -> Self {
         let data = try Data(contentsOf: url)
         guard data.count <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+        return try decode(data)
+    }
+
+    public static func decode(_ data: Data) throws -> Self {
+        guard data.count <= maximumProviderBytes else { throw CocoaError(.fileReadTooLarge) }
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard value.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
         return value
     }
 
+    public func providerData() throws -> Data {
+        let data = try JSONEncoder().encode(self)
+        guard data.count <= Self.maximumProviderBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+        return data
+    }
+
     public func save(to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                withIntermediateDirectories: true)
-        try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        try providerData().write(to: url, options: .atomic)
     }
 
     public static func parseList(_ text: String) throws -> Set<BlockingHostname> {
