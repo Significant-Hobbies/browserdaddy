@@ -21,6 +21,9 @@ struct BlockingView: View {
                                     controller.setEnabled(!controller.enabled)
                                 }.disabled(controller.busy)
                                 Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
+                                if controller.enabled && controller.ready {
+                                    Button("Apply saved rules") { controller.setEnabled(true) }.disabled(controller.busy)
+                                }
                             }
                         }
                         Text(controller.extensionBundled
@@ -94,10 +97,15 @@ struct BlockingView: View {
             .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.fog)
+        .onChange(of: controller.configuration.sites) { _, sites in
+            if let host = BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)), sites.contains(host) {
+                site = ""
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             controller.refresh()
         }
     }
 
-    private func addSite() { if controller.addSite(site) { site = "" } }
+    private func addSite() { _ = controller.addSite(site) }
 }

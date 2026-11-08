@@ -60,6 +60,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 busy = false
                 self.error = "Could not load local blocking rules. Editing is disabled to preserve the saved file: \(error.localizedDescription)"
                 status = "Rules unavailable · saved file preserved"
+                refresh()
             }
         }
     }
@@ -69,7 +70,6 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func refresh() {
-        guard ready else { return }
         guard !pendingApproval else { status = "Approve BrowserDaddy in System Settings → Login Items & Extensions"; return }
         guard !preview else { status = "Preview · filter inactive"; return }
         guard extensionBundled else { status = "Filter not installed in this build"; return }
@@ -79,7 +79,14 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 if let failure { self.error = failure.localizedDescription; self.status = "Filter status unavailable"; return }
                 let ours = self.manager.providerConfiguration?.filterDataProviderBundleIdentifier == BlockingConfiguration.extensionID
                 self.enabled = ours && self.manager.isEnabled
-                self.status = self.enabled ? "Filter configured · runtime unverified" : "Filter off"
+                guard self.enabled else { self.status = "Filter off"; return }
+                guard self.ready else { self.status = "Filter configured · local rules unavailable"; return }
+                let applied = self.manager.providerConfiguration?.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data
+                let expected = self.configuration
+                let matches = await Task.detached {
+                    applied.flatMap { try? BlockingConfiguration.decode($0) } == expected
+                }.value
+                self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply saved rules"
             }
         }
     }
@@ -101,7 +108,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 if enabled { setEnabled(true) }
             } catch {
                 busy = false
-                self.error = "Rules were not saved (maximum 16 MB): \(error.localizedDescription)"
+                self.error = "Rules were not saved: \(error.localizedDescription)"
             }
         }
     }
@@ -158,7 +165,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func setEnabled(_ value: Bool) {
-        guard !preview, ready, !busy, !pendingApproval, let payload else { return }
+        guard !preview, !busy, !pendingApproval else { return }
+        guard !value || (ready && payload != nil) else {
+            error = "Load valid local rules before enabling the filter."
+            return
+        }
         busy = true
         manager.loadFromPreferences { [weak self] failure in
             Task { @MainActor in
@@ -169,12 +180,14 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                     self.finish(NSError(domain: "Blocking", code: 1, userInfo: [NSLocalizedDescriptionKey: "Another filter configuration is present. It was not changed."]))
                     return
                 }
-                let config = NEFilterProviderConfiguration()
-                config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
-                config.filterBrowsers = true
-                config.filterSockets = true
-                config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
-                self.manager.providerConfiguration = config
+                if value, let payload = self.payload {
+                    let config = NEFilterProviderConfiguration()
+                    config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
+                    config.filterBrowsers = true
+                    config.filterSockets = true
+                    config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
+                    self.manager.providerConfiguration = config
+                }
                 self.manager.localizedDescription = "BrowserDaddy site blocking"
                 self.manager.isEnabled = value
                 self.manager.saveToPreferences { failure in
