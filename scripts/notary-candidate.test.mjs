@@ -53,3 +53,33 @@ test('rejects changed bytes before inspecting or executing the app', () => {
     rmSync(dir, { recursive: true });
   }
 });
+
+const signedEntitlements = {
+  'com.apple.application-identifier': '8F7LXHTJZR.com.significanthobbies.browserdaddy',
+  'com.apple.developer.team-identifier': '8F7LXHTJZR',
+  'com.apple.developer.networking.networkextension': ['content-filter-provider-systemextension'],
+  'com.apple.developer.system-extension.install': true,
+};
+
+function checkEntitlements(entitlements) {
+  return spawnSync('python3', ['-c',
+    "import sys,json;sys.path.insert(0,'scripts');from notary_candidate import validate_signed_entitlements;validate_signed_entitlements(json.load(sys.stdin),'com.significanthobbies.browserdaddy',host=True)"],
+  { input: JSON.stringify(entitlements), encoding: 'utf8' });
+}
+
+test('accepts the provisioned host identity and required signed permissions', () => {
+  const result = checkEntitlements(signedEntitlements);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+for (const [label, changes] of [
+  ['debug signing', { 'com.apple.security.get-task-allow': true }],
+  ['missing application identity', { 'com.apple.application-identifier': null }],
+  ['wrong team', { 'com.apple.developer.team-identifier': 'OTHERTEAM' }],
+  ['missing content filter', { 'com.apple.developer.networking.networkextension': [] }],
+  ['missing extension installation', { 'com.apple.developer.system-extension.install': false }],
+]) {
+  test(`rejects ${label} even when a profile grants the permission`, () => {
+    assert.notEqual(checkEntitlements({ ...signedEntitlements, ...changes }).status, 0);
+  });
+}

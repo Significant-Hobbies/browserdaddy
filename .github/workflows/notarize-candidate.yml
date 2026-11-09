@@ -13,7 +13,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write # GitHub requires push access to read private draft releases.
 
 concurrency:
   group: private-filter-notarization
@@ -43,6 +43,7 @@ jobs:
           git merge-base --is-ancestor "refs/tags/$CANDIDATE_TAG" HEAD
           mkdir "$RUNNER_TEMP/candidate"
           gh release download "$CANDIDATE_TAG" --pattern "$asset" --dir "$RUNNER_TEMP/candidate"
+          python3 scripts/notary_candidate.py --dmg "$RUNNER_TEMP/candidate/$asset" --sha256 "$CANDIDATE_SHA256"
           echo "CANDIDATE_DMG=$RUNNER_TEMP/candidate/$asset" >> "$GITHUB_ENV"
       - name: Verify signed host, filter and provisioning
         env:
@@ -55,6 +56,7 @@ jobs:
           python3 scripts/notary_candidate.py --dmg "$CANDIDATE_DMG" --sha256 "$CANDIDATE_SHA256" --app "$RUNNER_TEMP/candidate-mount/BrowserDaddy.app"
       - name: Notarize with existing protected credentials
         env:
+          CANDIDATE_SHA256: ${{ inputs.sha256 }}
           NOTARY_P8: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -78,6 +80,18 @@ jobs:
           xcrun stapler staple "$CANDIDATE_DMG"
           xcrun stapler validate "$CANDIDATE_DMG"
           spctl --assess --type open --context context:primary-signature "$CANDIDATE_DMG"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'candidate/notarization.json').read_text())
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Apple accepted the private filter candidate. No release was published.\n\n')
+              output.write('Submission: ' + result['id'] + '\n\n')
+              output.write('Input SHA-256: ' + os.environ['CANDIDATE_SHA256'] + '\n\n')
+              output.write('Runner-stapled SHA-256: ' + hashlib.sha256(Path(os.environ['CANDIDATE_DMG']).read_bytes()).hexdigest() + '\n')
+              output.write('The original local candidate can now be stapled and installed; no binary is uploaded to public Actions artifacts.\n')
+          print(json.dumps(result))
+          PY
       - name: Remove temporary notary key
         if: always()
         run: python3 -c 'import os; from pathlib import Path; (Path(os.environ["RUNNER_TEMP"]) / "notary.p8").unlink(missing_ok=True)'
