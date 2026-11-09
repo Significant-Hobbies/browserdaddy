@@ -96,7 +96,7 @@ def main():
     if len(extensions) != 1:
         raise ValueError("Expected exactly one embedded system extension")
     verify_bundle(extensions[0], BUNDLE + ".filter")
-    print("Verified signed candidate, embedded filter and provisioning")
+    print("Verified signed identities and required filter permissions; runtime activation remains unverified")
 
 
 if __name__ == "__main__":

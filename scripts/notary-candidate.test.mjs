@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -81,5 +81,36 @@ for (const [label, changes] of [
 ]) {
   test(`rejects ${label} even when a profile grants the permission`, () => {
     assert.notEqual(checkEntitlements({ ...signedEntitlements, ...changes }).status, 0);
+  });
+}
+
+for (const status of ['Accepted', 'Invalid']) {
+  test(`retains Apple's ${status} submission and retrieves rejection diagnostics`, () => {
+    const workflow = readFileSync('.github/workflows/notarize-candidate.yml', 'utf8');
+    const blocks = [...workflow.matchAll(/python3 - <<'PY'\n([\s\S]*?)\n          PY/g)];
+    const block = blocks.find((match) => match[1].includes("result.get('status') != 'Accepted'"));
+    assert.ok(block, 'Apple result handler exists in the executed workflow');
+    const script = block[1].split('\n').map((line) => line.replace(/^          /, '')).join('\n');
+    const dir = mkdtempSync(join(tmpdir(), 'browserdaddy-notary-result-'));
+    try {
+      mkdirSync(join(dir, 'candidate'));
+      mkdirSync(join(dir, 'bin'));
+      const tool = join(dir, 'bin', 'xcrun');
+      writeFileSync(tool, '#!/bin/sh\nprintf "retrieved rejection log\\n"\n');
+      chmodSync(tool, 0o700);
+      writeFileSync(join(dir, 'candidate', 'notarization.json'), JSON.stringify({ id: 'submission-test', status }));
+      const summary = join(dir, 'summary.md');
+      const result = spawnSync('python3', ['-c', script], { encoding: 'utf8', env: {
+        ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, RUNNER_TEMP: dir,
+        GITHUB_STEP_SUMMARY: summary, CANDIDATE_SHA256: digest,
+        NOTARY_KEY_ID: 'fixture', NOTARY_ISSUER_ID: 'fixture',
+      } });
+      assert.equal(result.status === 0, status === 'Accepted', result.stderr);
+      assert.match(readFileSync(summary, 'utf8'), new RegExp(`Apple notarization result: ${status}`));
+      assert.match(readFileSync(summary, 'utf8'), /Submission: submission-test/);
+      if (status === 'Invalid') assert.match(result.stdout, /retrieved rejection log/);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
   });
 }
