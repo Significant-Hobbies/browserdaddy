@@ -80,7 +80,7 @@ final class BlockingControllerTests: XCTestCase {
         var changed = initial
         changed.categories = []
         controller.save(changed)
-        for _ in 0..<5000 where controller.busy || preferences.saveCount == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        for _ in 0..<5000 where controller.busy || preferences.saveCount == 0 || controller.status != "Filter configured · runtime unverified" { try await Task.sleep(for: .milliseconds(1)) }
         XCTAssertEqual(preferences.saveCount, 1)
         XCTAssertEqual(try BlockingConfiguration.load(from: file), changed)
         XCTAssertEqual(try BlockingConfiguration.decodeProvider(XCTUnwrap(preferences.savedPayload)), changed.activeConfiguration)
