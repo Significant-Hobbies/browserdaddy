@@ -8,13 +8,11 @@ final class FilterDataProvider: NEFilterDataProvider {
     private let rulesQueue = DispatchQueue(label: "BrowserDaddy.filter.configuration")
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
-        do {
-            configurationObservation = observe(\.filterConfiguration, options: [.new]) { [weak self] _, _ in
-                self?.rulesQueue.async { [weak self] in try? self?.reload() }
-            }
-            try rulesQueue.sync { try reload() }
-            completionHandler(nil)
-        } catch { completionHandler(nil) }
+        configurationObservation = observe(\.filterConfiguration, options: [.new]) { [weak self] _, _ in
+            self?.rulesQueue.async { [weak self] in self?.reload() }
+        }
+        rulesQueue.sync { reload() }
+        completionHandler(nil)
     }
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -22,11 +20,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         completionHandler()
     }
 
-    private func reload() throws {
-        guard let data = filterConfiguration.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let next = try BlockingPolicy(data: data)
+    private func reload() {
+        let next = BlockingPolicy(vendorConfiguration: filterConfiguration.vendorConfiguration)
         lock.lock()
         policy = next
         lock.unlock()

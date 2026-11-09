@@ -2,6 +2,7 @@
 """Assemble and sign an isolated candidate. Never installs or publishes it."""
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import plistlib
 import shutil
@@ -25,6 +26,20 @@ def validate_filter_signature(path):
     if "TeamIdentifier=" + FILTER_TEAM not in fields or not any(
             line.startswith("Authority=Developer ID Application:") for line in fields):
         raise SystemExit("Filtering requires a Developer ID signature from the BrowserDaddy team")
+
+
+def validate_filter_pairing(path, info, version, build):
+    if info.get("CFBundleShortVersionString") != version or info.get("CFBundleVersion") != str(build):
+        raise SystemExit("Filter version must match the host release version and build")
+    source = ROOT / "Sources/BrowserDaddy/Resources/BlockingLists"
+    manifest = json.loads((source / "SOURCE.json").read_text())
+    resources = path / "Contents/Resources"
+    if not (resources / "SOURCE.json").is_file() or json.loads((resources / "SOURCE.json").read_text()) != manifest:
+        raise SystemExit("Filter bundled list manifest does not match this source")
+    for name in ("Adult.txt", "Gambling.txt", "LICENSE.txt"):
+        asset = resources / name
+        if not asset.is_file() or hashlib.sha256(asset.read_bytes()).hexdigest() != manifest["files"][name]:
+            raise SystemExit("Filter bundled resource is missing or stale: " + name)
 
 
 def main():
@@ -54,6 +69,7 @@ def main():
             raise SystemExit("Unexpected filter Mach service name")
         run("codesign", "--verify", "--deep", "--strict", args.filter_extension)
         validate_filter_signature(args.filter_extension)
+        validate_filter_pairing(args.filter_extension, filter_info, args.version, args.build)
     products = args.products.resolve()
     binary = products / "BrowserDaddy"
     resources = products / "BrowserDaddy_BrowserDaddy.bundle"

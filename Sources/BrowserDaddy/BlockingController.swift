@@ -62,6 +62,7 @@ private final class SystemBlockingPreferences: BlockingPreferences {
         }
         if enabled {
             guard let payload else { throw CocoaError(.fileReadCorruptFile) }
+            try BlockingConfiguration.validateProviderSize(payload)
             let config = NEFilterProviderConfiguration()
             config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
             config.filterBrowsers = true
@@ -88,6 +89,9 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     @Published private(set) var ready = false
     private var pendingApproval = false
     private var activationRequest: OSSystemExtensionRequest?
+    private var activationVerified = false
+    private var enableAfterActivation = false
+    private let extensionActivation: ((@escaping @MainActor () -> Void) -> Void)?
     private var payload: Data?
     @Published private(set) var configuration = BlockingConfiguration()
     @Published private(set) var status = "Checking filter…"
@@ -102,9 +106,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     private let extensionAvailable: Bool?
 
     init(rulesURL suppliedURL: URL? = nil, preview suppliedPreview: Bool? = nil,
-         preferences: (any BlockingPreferences)? = nil, extensionAvailable: Bool? = nil) {
+         preferences: (any BlockingPreferences)? = nil, extensionAvailable: Bool? = nil,
+         extensionActivation: ((@escaping @MainActor () -> Void) -> Void)? = nil) {
         self.preferences = preferences ?? SystemBlockingPreferences()
         self.extensionAvailable = extensionAvailable
+        self.extensionActivation = extensionActivation
         preview = suppliedPreview ?? (CommandLine.arguments.contains("--preview-fixture")
             || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true)
         super.init()
@@ -117,7 +123,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         busy = true
         Task {
             do {
-                let (loaded, data) = try await Task.detached(priority: .userInitiated) {
+                let (loaded, data, transportError) = try await Task.detached(priority: .userInitiated) { () throws -> (BlockingConfiguration, Data?, String?) in
                     guard let url else { throw CocoaError(.fileNoSuchFile) }
                     var loaded = BlockingConfiguration()
                     if FileManager.default.fileExists(atPath: url.path) {
@@ -131,12 +137,17 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                             }
                             loaded.lists[category] = try BlockingConfiguration.parseList(String(contentsOf: resource, encoding: .utf8))
                         }
+                        _ = try loaded.providerData()
                         try loaded.save(to: url)
                     }
-                    return (loaded, try loaded.providerData())
+                    do { return (loaded, try loaded.providerData(), nil) }
+                    catch { return (loaded, nil, error.localizedDescription) }
                 }.value
                 configuration = loaded
                 payload = data
+                if let transportError {
+                    error = "Saved rules loaded but cannot be applied: \(transportError) Disable a category or import a smaller custom list."
+                }
                 ready = true
                 busy = false
                 refresh()
@@ -148,6 +159,14 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 refresh()
             }
         }
+    }
+
+    nonisolated private static let bundledListCatalog = BlockingListCatalog { category in
+        let name = category == .adult ? "Adult" : "Gambling"
+        guard let url = Bundle.module.url(forResource: name, withExtension: "txt") else {
+            throw BlockingTransportError.missingResource
+        }
+        return try Data(contentsOf: url)
     }
 
     var extensionBundled: Bool {
@@ -174,9 +193,9 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 }
                 guard self.ready else { self.status = "Filter configured · local rules unavailable"; return }
                 let applied = state.payload
-                let expected = self.configuration
+                let expected = self.configuration.activeConfiguration
                 let matches = await Task.detached {
-                    applied.flatMap { try? BlockingConfiguration.decode($0) } == expected
+                    applied.flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: Self.bundledListCatalog) } == expected
                 }.value
                 guard self.refreshGeneration == generation else { return }
                 self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply saved rules"
@@ -259,8 +278,14 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
 
     func activate() {
         guard !preview, ready, extensionBundled, !pendingApproval, !busy else { return }
+        activationVerified = false
+        enableAfterActivation = true
         busy = true
         status = "Waiting for macOS approval…"
+        if let extensionActivation {
+            extensionActivation { [weak self] in self?.finishActivation() }
+            return
+        }
         let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: BlockingConfiguration.extensionID, queue: .main)
         activationRequest = request
         request.delegate = self
@@ -271,6 +296,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         guard !preview, !busy, !(value && pendingApproval) else { return }
         guard !value || (ready && payload != nil) else {
             if error.isEmpty { error = "Load valid local rules before enabling the filter." }
+            return
+        }
+        enableAfterActivation = value
+        if value && !activationVerified {
+            activate()
             return
         }
         refreshGeneration &+= 1
@@ -285,6 +315,13 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 finish(error)
             }
         }
+    }
+
+    private func finishActivation() {
+        activationVerified = true
+        busy = false
+        if enableAfterActivation { setEnabled(true) }
+        else { refresh() }
     }
 
     private func finish(_ failure: Error?) {
@@ -306,6 +343,9 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         Task { @MainActor in
             self.activationRequest = nil
             self.pendingApproval = false
+            self.activationVerified = false
+            self.ruleDelivery = .failed
+            self.enableAfterActivation = false
             self.finish(error)
         }
     }
@@ -314,8 +354,13 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             self.activationRequest = nil
             self.pendingApproval = false
             self.busy = false
-            if result == .completed { self.setEnabled(true) }
-            else { self.status = "Restart your Mac to finish installing the filter" }
+            if result == .completed { self.finishActivation() }
+            else {
+                self.activationVerified = false
+                self.ruleDelivery = .failed
+                self.enableAfterActivation = false
+                self.status = "Restart your Mac to finish installing the filter"
+            }
         }
     }
 }

@@ -1,11 +1,14 @@
 import Foundation
+import CryptoKit
 
 public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static let group = "8F7LXHTJZR.com.significanthobbies.browserdaddy"
     public static let extensionID = "com.significanthobbies.browserdaddy.filter"
     public static let filename = "blocking-rules.json"
-    public static let providerRulesKey = "rules-v1"
-    public static let maximumProviderBytes = 16 * 1024 * 1024
+    public static let providerRulesKey = "rules-v2"
+    public static let legacyProviderRulesKey = "rules-v1"
+    public static let maximumLocalBytes = 16 * 1024 * 1024
+    public static let maximumProviderBytes = 480 * 1024
     public var version = 1
     public var sites: Set<BlockingHostname> = []
     public var categories: Set<BlockingCategory> = []
@@ -25,6 +28,12 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         categories = try values.decode(Set<BlockingCategory>.self, forKey: .categories)
         lists = try values.decode([BlockingCategory: Set<BlockingHostname>].self, forKey: .lists)
         strictUnknownDestinations = try values.decodeIfPresent(Bool.self, forKey: .strictUnknownDestinations) ?? false
+    }
+
+    public var activeConfiguration: Self {
+        var result = self
+        result.lists = lists.filter { categories.contains($0.key) }
+        return result
     }
 
     public var rules: SiteBlockingRules {
@@ -47,7 +56,7 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     }
 
     public static func decode(_ data: Data) throws -> Self {
-        guard data.count <= maximumProviderBytes else { throw CocoaError(.fileReadTooLarge) }
+        guard data.count <= maximumLocalBytes else { throw CocoaError(.fileReadTooLarge) }
         let value = try JSONDecoder().decode(Self.self, from: data)
         try value.validate()
         return value
@@ -55,8 +64,52 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
 
     public func providerData() throws -> Data {
         try validate()
+        var sources: [BlockingCategory: BlockingListSource] = [:]
+        for (category, hosts) in lists where categories.contains(category) {
+            if !hosts.isEmpty && BlockingListCatalog.canonicalDigest(hosts) == BlockingListCatalog.canonicalDigests[category] {
+                sources[category] = .bundled(sha256: BlockingListCatalog.rawDigests[category]!)
+            } else {
+                sources[category] = .inline(hosts)
+            }
+        }
+        let value = BlockingProviderConfiguration(version: 2, sites: sites, categories: categories,
+            sources: sources, strictUnknownDestinations: strictUnknownDestinations)
+        let data = try JSONEncoder().encode(value)
+        try Self.validateProviderSize(data)
+        return data
+    }
+
+    public static func validateProviderSize(_ data: Data) throws {
+        guard data.count <= maximumProviderBytes else { throw BlockingTransportError.configurationTooLarge }
+        let vendor = [providerRulesKey: data]
+        for format in [PropertyListSerialization.PropertyListFormat.binary, .xml] {
+            let encoded = try PropertyListSerialization.data(fromPropertyList: vendor, format: format, options: 0)
+            guard encoded.count <= maximumProviderBytes else { throw BlockingTransportError.configurationTooLarge }
+        }
+    }
+
+    public static func decodeProvider(_ data: Data, catalog: BlockingListCatalog = .main) throws -> Self {
+        try validateProviderSize(data)
+        let value = try JSONDecoder().decode(BlockingProviderConfiguration.self, from: data)
+        guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
+        var result = Self()
+        result.sites = value.sites
+        result.categories = value.categories
+        result.strictUnknownDestinations = value.strictUnknownDestinations
+        for (category, source) in value.sources {
+            switch source {
+            case .bundled(let sha256): result.lists[category] = try catalog.resolve(category, sha256: sha256)
+            case .inline(let hosts): result.lists[category] = hosts
+            }
+        }
+        try result.validate()
+        return result
+    }
+
+    public func localData() throws -> Data {
+        try validate()
         let data = try JSONEncoder().encode(self)
-        guard data.count <= Self.maximumProviderBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+        guard data.count <= Self.maximumLocalBytes else { throw CocoaError(.fileWriteOutOfSpace) }
         return data
     }
 
@@ -70,7 +123,7 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public func save(to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                withIntermediateDirectories: true)
-        try providerData().write(to: url, options: .atomic)
+        try localData().write(to: url, options: .atomic)
     }
 
     public static func parseList(_ text: String) throws -> Set<BlockingHostname> {
@@ -100,9 +153,96 @@ public struct BlockingPolicy: Sendable {
     private let configuration: BlockingConfiguration?
 
     public init() { configuration = nil }
-    public init(data: Data) throws { configuration = try BlockingConfiguration.decode(data) }
+    public init(data: Data, catalog: BlockingListCatalog = .main) throws {
+        configuration = try BlockingConfiguration.decodeProvider(data, catalog: catalog)
+    }
+
+    public init(committedProviderData: Data?, catalog: BlockingListCatalog = .main) {
+        configuration = committedProviderData.flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+    }
+
+    public init(vendorConfiguration: [String: Any]?, catalog: BlockingListCatalog = .main) {
+        if let vendorConfiguration, vendorConfiguration.keys.contains(BlockingConfiguration.providerRulesKey) {
+            configuration = (vendorConfiguration[BlockingConfiguration.providerRulesKey] as? Data)
+                .flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+        } else if let data = vendorConfiguration?[BlockingConfiguration.legacyProviderRulesKey] as? Data,
+                  data.count <= 512 * 1024 {
+            configuration = try? BlockingConfiguration.decode(data).activeConfiguration
+        } else {
+            configuration = nil
+        }
+    }
 
     public func blocks(hostname: String?, outgoing: Bool) -> Bool {
         configuration?.blocks(hostname: hostname, outgoing: outgoing) ?? outgoing
+    }
+}
+
+private enum BlockingListSource: Codable {
+    case bundled(sha256: String)
+    case inline(Set<BlockingHostname>)
+}
+
+private struct BlockingProviderConfiguration: Codable {
+    let version: Int
+    let sites: Set<BlockingHostname>
+    let categories: Set<BlockingCategory>
+    let sources: [BlockingCategory: BlockingListSource]
+    let strictUnknownDestinations: Bool
+}
+
+public enum BlockingTransportError: LocalizedError {
+    case configurationTooLarge, unsupportedVersion, unsupportedReference, missingResource, corruptResource, invalidList
+
+    public var errorDescription: String? {
+        switch self {
+        case .configurationTooLarge: return "These rules exceed the macOS filter limit. Use smaller custom lists or the bundled categories."
+        case .unsupportedVersion: return "Unsupported filter rules version."
+        case .unsupportedReference: return "Unsupported bundled category reference."
+        case .missingResource: return "A bundled category list is missing."
+        case .corruptResource: return "A bundled category list failed its integrity check."
+        case .invalidList: return "A category list must contain valid domains."
+        }
+    }
+}
+
+public struct BlockingListCatalog: Sendable {
+    private let resource: @Sendable (BlockingCategory) throws -> Data
+
+    public init(resource: @escaping @Sendable (BlockingCategory) throws -> Data) {
+        self.resource = resource
+    }
+
+    public static let main = BlockingListCatalog { category in
+        let name = category == .adult ? "Adult" : "Gambling"
+        guard let url = Bundle.main.url(forResource: name, withExtension: "txt") else {
+            throw BlockingTransportError.missingResource
+        }
+        return try Data(contentsOf: url)
+    }
+
+    static let rawDigests: [BlockingCategory: String] = [
+        .adult: "4eb9d0d020d546521c4d90485d7c423f6fbb1336e880d003fd08dcce5c7675d3",
+        .gambling: "a0655a6a781fea5a8ecd5bf2b45e83cacd4b7b27350a34d58544de5d866cae2c"
+    ]
+    static let canonicalDigests: [BlockingCategory: String] = [
+        .adult: "5892095c2383c1686ae5ac90210523eb3f6754676e376d098c8d6d739b428c57",
+        .gambling: "304494de8354d8c560260778467b931d065cfa1a7141e1aca968fe46ee47b31c"
+    ]
+
+    static func canonicalDigest(_ hosts: Set<BlockingHostname>) -> String {
+        digest(Data((hosts.map(\.value).sorted().joined(separator: "\n") + "\n").utf8))
+    }
+
+    private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func resolve(_ category: BlockingCategory, sha256: String) throws -> Set<BlockingHostname> {
+        guard sha256 == Self.rawDigests[category] else { throw BlockingTransportError.unsupportedReference }
+        let data = try resource(category)
+        guard Self.digest(data) == sha256 else { throw BlockingTransportError.corruptResource }
+        guard let text = String(data: data, encoding: .utf8) else { throw BlockingTransportError.invalidList }
+        return try BlockingConfiguration.parseList(text)
     }
 }
