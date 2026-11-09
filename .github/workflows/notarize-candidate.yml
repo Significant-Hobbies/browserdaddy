@@ -1,0 +1,83 @@
+name: Notarize private filter candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag with a private draft DMG attached
+        required: true
+        type: string
+      sha256:
+        description: Exact SHA-256 of the locally signed DMG
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-filter-notarization
+  cancel-in-progress: false
+
+jobs:
+  notarize:
+    if: github.ref == 'refs/heads/main'
+    environment: production-release
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate and download private candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CANDIDATE_TAG: ${{ inputs.tag }}
+          CANDIDATE_SHA256: ${{ inputs.sha256 }}
+        run: |
+          set -euo pipefail
+          gh release view "$CANDIDATE_TAG" --json isDraft,tagName,assets > "$RUNNER_TEMP/draft.json"
+          asset="$(python3 scripts/notary_candidate.py --release-json "$RUNNER_TEMP/draft.json" --tag "$CANDIDATE_TAG" --sha256 "$CANDIDATE_SHA256")"
+          git merge-base --is-ancestor "refs/tags/$CANDIDATE_TAG" HEAD
+          mkdir "$RUNNER_TEMP/candidate"
+          gh release download "$CANDIDATE_TAG" --pattern "$asset" --dir "$RUNNER_TEMP/candidate"
+          echo "CANDIDATE_DMG=$RUNNER_TEMP/candidate/$asset" >> "$GITHUB_ENV"
+      - name: Verify signed host, filter and provisioning
+        env:
+          CANDIDATE_SHA256: ${{ inputs.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/candidate-mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "$CANDIDATE_DMG"
+          trap 'hdiutil detach "$RUNNER_TEMP/candidate-mount"' EXIT
+          python3 scripts/notary_candidate.py --dmg "$CANDIDATE_DMG" --sha256 "$CANDIDATE_SHA256" --app "$RUNNER_TEMP/candidate-mount/BrowserDaddy.app"
+      - name: Notarize with existing protected credentials
+        env:
+          NOTARY_P8: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          key = Path(os.environ['RUNNER_TEMP']) / 'notary.p8'
+          key.write_bytes(base64.b64decode(os.environ['NOTARY_P8'], validate=True))
+          key.chmod(0o600)
+          PY
+          xcrun notarytool submit "$CANDIDATE_DMG" --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait --output-format json > "$RUNNER_TEMP/candidate/notarization.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'candidate/notarization.json').read_text())
+          if result.get('status') != 'Accepted' or not result.get('id'):
+              raise SystemExit('Apple did not accept the private candidate')
+          PY
+          xcrun stapler staple "$CANDIDATE_DMG"
+          xcrun stapler validate "$CANDIDATE_DMG"
+          spctl --assess --type open --context context:primary-signature "$CANDIDATE_DMG"
+      - name: Remove temporary notary key
+        if: always()
+        run: python3 -c 'import os; from pathlib import Path; (Path(os.environ["RUNNER_TEMP"]) / "notary.p8").unlink(missing_ok=True)'
