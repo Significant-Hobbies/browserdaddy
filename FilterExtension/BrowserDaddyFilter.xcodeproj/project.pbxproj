@@ -8,13 +8,21 @@
 
 /* Begin PBXBuildFile section */
 		179A66B0521AC1A943953D90 /* FilterDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E9FBEAC5D288DEEE32D66 /* FilterDataProvider.swift */; };
+		3D153EEDEFAC8C121B4EC71F /* LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0D24BF7194B8416DC2541502 /* LICENSE.txt */; };
 		645A02D45C2B96C284DAA822 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0498903CFFDDE48DD81DC9 /* main.swift */; };
 		86B487161D4E5289F5D65B2E /* BlockingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC098CA3DDE0684C6DD8135 /* BlockingConfiguration.swift */; };
+		8E25A952DB23DFD8FE2DAB40 /* SOURCE.json in Resources */ = {isa = PBXBuildFile; fileRef = 2E7D0E5D3A4DBCD10E9EC7BD /* SOURCE.json */; };
 		A8CC297E399E7481773237BB /* SiteBlocking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A20447EBEE69A6FA506DFE8 /* SiteBlocking.swift */; };
+		E67A5E3192162E1718631B0E /* Gambling.txt in Resources */ = {isa = PBXBuildFile; fileRef = 390F56B2AC8DFD35E42BC4D9 /* Gambling.txt */; };
+		EC61C116C524E94EF34803A3 /* Adult.txt in Resources */ = {isa = PBXBuildFile; fileRef = 00E5CE0B09F74BE377178D8E /* Adult.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		00E5CE0B09F74BE377178D8E /* Adult.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Adult.txt; sourceTree = "<group>"; };
+		0D24BF7194B8416DC2541502 /* LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE.txt; sourceTree = "<group>"; };
 		274CFFA64EE6208E1C463E63 /* BrowserDaddyFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = BrowserDaddyFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		2E7D0E5D3A4DBCD10E9EC7BD /* SOURCE.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = SOURCE.json; sourceTree = "<group>"; };
+		390F56B2AC8DFD35E42BC4D9 /* Gambling.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Gambling.txt; sourceTree = "<group>"; };
 		458E9FBEAC5D288DEEE32D66 /* FilterDataProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterDataProvider.swift; sourceTree = "<group>"; };
 		6A20447EBEE69A6FA506DFE8 /* SiteBlocking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteBlocking.swift; sourceTree = "<group>"; };
 		6EC098CA3DDE0684C6DD8135 /* BlockingConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockingConfiguration.swift; sourceTree = "<group>"; };
@@ -27,9 +35,22 @@
 			children = (
 				458E9FBEAC5D288DEEE32D66 /* FilterDataProvider.swift */,
 				CD0498903CFFDDE48DD81DC9 /* main.swift */,
+				22024003198775BC0C2E7A4B /* BlockingLists */,
 				A8EA7CDFCC1780CC31E60A70 /* BrowserCore */,
 				3E649297AF1332008D3D3ADE /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		22024003198775BC0C2E7A4B /* BlockingLists */ = {
+			isa = PBXGroup;
+			children = (
+				00E5CE0B09F74BE377178D8E /* Adult.txt */,
+				390F56B2AC8DFD35E42BC4D9 /* Gambling.txt */,
+				0D24BF7194B8416DC2541502 /* LICENSE.txt */,
+				2E7D0E5D3A4DBCD10E9EC7BD /* SOURCE.json */,
+			);
+			name = BlockingLists;
+			path = ../Sources/BrowserDaddy/Resources/BlockingLists;
 			sourceTree = "<group>";
 		};
 		3E649297AF1332008D3D3ADE /* Products */ = {
@@ -58,6 +79,7 @@
 			buildConfigurationList = 9FBC1E3AEC2D5AC06ACBC14E /* Build configuration list for PBXNativeTarget "BrowserDaddyFilter" */;
 			buildPhases = (
 				1CB0EBD3E114BA124DB0CCFC /* Sources */,
+				35CB9D3EC9A07C235B52426B /* Resources */,
 			);
 			buildRules = (
 			);
@@ -100,6 +122,20 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		35CB9D3EC9A07C235B52426B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC61C116C524E94EF34803A3 /* Adult.txt in Resources */,
+				E67A5E3192162E1718631B0E /* Gambling.txt in Resources */,
+				3D153EEDEFAC8C121B4EC71F /* LICENSE.txt in Resources */,
+				8E25A952DB23DFD8FE2DAB40 /* SOURCE.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		1CB0EBD3E114BA124DB0CCFC /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -121,6 +157,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_ENTITLEMENTS = Entitlements.plist;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -128,6 +165,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.significanthobbies.browserdaddy.filter;
 				PRODUCT_NAME = com.significanthobbies.browserdaddy.filter;
 				SDKROOT = macosx;
@@ -260,6 +298,7 @@
 				CODE_SIGN_ENTITLEMENTS = Entitlements.plist;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -268,6 +307,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.5.0;
 				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_BUNDLE_IDENTIFIER = com.significanthobbies.browserdaddy.filter;
 				PRODUCT_NAME = com.significanthobbies.browserdaddy.filter;

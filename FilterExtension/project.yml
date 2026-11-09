@@ -16,6 +16,14 @@ targets:
       - path: main.swift
       - path: ../Sources/BrowserCore/SiteBlocking.swift
       - path: ../Sources/BrowserCore/BlockingConfiguration.swift
+      - path: ../Sources/BrowserDaddy/Resources/BlockingLists/Adult.txt
+        buildPhase: resources
+      - path: ../Sources/BrowserDaddy/Resources/BlockingLists/Gambling.txt
+        buildPhase: resources
+      - path: ../Sources/BrowserDaddy/Resources/BlockingLists/SOURCE.json
+        buildPhase: resources
+      - path: ../Sources/BrowserDaddy/Resources/BlockingLists/LICENSE.txt
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.significanthobbies.browserdaddy.filter
@@ -23,6 +31,8 @@ targets:
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_ENTITLEMENTS: Entitlements.plist
         SWIFT_VERSION: '5.0'
+        CURRENT_PROJECT_VERSION: 2
+        MARKETING_VERSION: 0.5.0
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
         CODE_SIGNING_ALLOWED: NO
