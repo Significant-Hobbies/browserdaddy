@@ -21,8 +21,7 @@ final class FilterDataProvider: NEFilterDataProvider {
     }
 
     private func reload() {
-        let data = filterConfiguration.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data
-        let next = BlockingPolicy(committedProviderData: data)
+        let next = BlockingPolicy(vendorConfiguration: filterConfiguration.vendorConfiguration)
         lock.lock()
         policy = next
         lock.unlock()

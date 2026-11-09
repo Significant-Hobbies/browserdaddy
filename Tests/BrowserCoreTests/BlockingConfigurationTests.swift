@@ -2,6 +2,35 @@ import XCTest
 @testable import BrowserCore
 
 final class BlockingConfigurationTests: XCTestCase {
+    func testLegacyNativePreferencesKeepTheirPolicyUntilV2IsCommitted() throws {
+        var legacy = BlockingConfiguration()
+        legacy.sites = [BlockingHostname("blocked.test")!]
+        legacy.categories = [.adult]
+        legacy.lists[.adult] = [BlockingHostname("adult.test")!]
+        let old = try legacy.localData()
+        var policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.legacyProviderRulesKey: old])
+        XCTAssertTrue(policy.blocks(hostname: "sub.blocked.test", outgoing: true))
+        XCTAssertTrue(policy.blocks(hostname: "sub.adult.test", outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
+        for invalid in [Data("invalid".utf8), NSNull()] as [Any] {
+            policy = BlockingPolicy(vendorConfiguration: [
+                BlockingConfiguration.legacyProviderRulesKey: old,
+                BlockingConfiguration.providerRulesKey: invalid
+            ])
+            XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+        }
+        let current = try legacy.providerData()
+        policy = BlockingPolicy(vendorConfiguration: [
+            BlockingConfiguration.legacyProviderRulesKey: Data("invalid".utf8),
+            BlockingConfiguration.providerRulesKey: current
+        ])
+        XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
+        policy = BlockingPolicy(vendorConfiguration: [
+            BlockingConfiguration.legacyProviderRulesKey: Data(repeating: 0, count: 512 * 1024 + 1)
+        ])
+        XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+    }
+
     func testProviderStartsClosedAndRetainsValidPolicyAfterRejectedReplacement() throws {
         var policy = BlockingPolicy()
         XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))

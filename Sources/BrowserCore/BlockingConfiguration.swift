@@ -6,6 +6,7 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static let extensionID = "com.significanthobbies.browserdaddy.filter"
     public static let filename = "blocking-rules.json"
     public static let providerRulesKey = "rules-v2"
+    public static let legacyProviderRulesKey = "rules-v1"
     public static let maximumLocalBytes = 16 * 1024 * 1024
     public static let maximumProviderBytes = 480 * 1024
     public var version = 1
@@ -160,6 +161,18 @@ public struct BlockingPolicy: Sendable {
         configuration = committedProviderData.flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
     }
 
+    public init(vendorConfiguration: [String: Any]?, catalog: BlockingListCatalog = .main) {
+        if let vendorConfiguration, vendorConfiguration.keys.contains(BlockingConfiguration.providerRulesKey) {
+            configuration = (vendorConfiguration[BlockingConfiguration.providerRulesKey] as? Data)
+                .flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+        } else if let data = vendorConfiguration?[BlockingConfiguration.legacyProviderRulesKey] as? Data,
+                  data.count <= 512 * 1024 {
+            configuration = try? BlockingConfiguration.decode(data).activeConfiguration
+        } else {
+            configuration = nil
+        }
+    }
+
     public func blocks(hostname: String?, outgoing: Bool) -> Bool {
         configuration?.blocks(hostname: hostname, outgoing: outgoing) ?? outgoing
     }
@@ -183,7 +196,7 @@ public enum BlockingTransportError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .configurationTooLarge: return "Custom lists exceed the macOS filter limit. Use smaller custom lists or the bundled categories. Your previous saved rules were kept."
+        case .configurationTooLarge: return "These rules exceed the macOS filter limit. Use smaller custom lists or the bundled categories."
         case .unsupportedVersion: return "Unsupported filter rules version."
         case .unsupportedReference: return "Unsupported bundled category reference."
         case .missingResource: return "A bundled category list is missing."

@@ -6,6 +6,35 @@ import SystemExtensions
 
 final class BlockingControllerTests: XCTestCase {
     @MainActor
+    func testFailedActivationDoesNotRetryPendingRuleDelivery() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let initial = BlockingConfiguration()
+        try initial.save(to: file)
+        let preferences = MemoryBlockingPreferences(payload: try initial.providerData())
+        var failActivation: (() -> Void)?
+        var attempts = 0
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { _ in
+                attempts += 1
+                if attempts == 1 { failActivation?() }
+            })
+        let request = OSSystemExtensionRequest.activationRequest(
+            forExtensionWithIdentifier: BlockingConfiguration.extensionID, queue: .main)
+        failActivation = { controller.request(request, didFailWithError: CocoaError(.fileReadUnknown)) }
+        for _ in 0..<1000 where !controller.enabled { try await Task.sleep(for: .milliseconds(1)) }
+        var changed = initial
+        changed.strictUnknownDestinations = true
+        controller.save(changed)
+        for _ in 0..<1000 where attempts == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(attempts, 1)
+        XCTAssertFalse(controller.busy)
+        XCTAssertEqual(preferences.saveCount, 0)
+        XCTAssertTrue(controller.error.contains("not updated"))
+    }
+
+    @MainActor
     func testDisableDuringApprovalStaysOffAfterActivationCompletes() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         defer { try? FileManager.default.removeItem(at: file) }

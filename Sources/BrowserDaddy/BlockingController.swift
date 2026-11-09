@@ -278,6 +278,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
 
     func activate() {
         guard !preview, ready, extensionBundled, !pendingApproval, !busy else { return }
+        activationVerified = false
         enableAfterActivation = true
         busy = true
         status = "Waiting for macOS approval…"
@@ -343,6 +344,8 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             self.activationRequest = nil
             self.pendingApproval = false
             self.activationVerified = false
+            self.ruleDelivery = .failed
+            self.enableAfterActivation = false
             self.finish(error)
         }
     }
@@ -352,7 +355,12 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             self.pendingApproval = false
             self.busy = false
             if result == .completed { self.finishActivation() }
-            else { self.status = "Restart your Mac to finish installing the filter" }
+            else {
+                self.activationVerified = false
+                self.ruleDelivery = .failed
+                self.enableAfterActivation = false
+                self.status = "Restart your Mac to finish installing the filter"
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 """Resource staging checks with synthetic products; never signs or releases."""
 from pathlib import Path
 import os
+import hashlib
+import json
 import plistlib
 import runpy
 import subprocess
@@ -21,6 +23,34 @@ class StagingComplete(Exception):
 
 
 class ResourcePackagingTests(unittest.TestCase):
+    def test_filter_pairing_rejects_stale_versions_and_resources(self):
+        for failure in (None, "version", "build", "manifest", "Adult.txt", "Gambling.txt", "LICENSE.txt", "missing"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                source = root / "Sources/BrowserDaddy/Resources/BlockingLists"
+                source.mkdir(parents=True)
+                resources = root / "Filter.systemextension/Contents/Resources"
+                resources.mkdir(parents=True)
+                files = {name: (name + " fixture").encode() for name in ("Adult.txt", "Gambling.txt", "LICENSE.txt")}
+                manifest = {"revision": "fixture", "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
+                (source / "SOURCE.json").write_text(json.dumps(manifest))
+                (resources / "SOURCE.json").write_text(json.dumps(manifest))
+                for name, data in files.items():
+                    (resources / name).write_bytes(data)
+                info = {"CFBundleShortVersionString": "1.2.3", "CFBundleVersion": "4"}
+                if failure == "version": info["CFBundleShortVersionString"] = "1.2.2"
+                elif failure == "build": info["CFBundleVersion"] = "3"
+                elif failure == "manifest": (resources / "SOURCE.json").write_text("{}")
+                elif failure in files: (resources / failure).write_bytes(b"changed")
+                elif failure == "missing": (resources / "Adult.txt").unlink()
+                validate = runpy.run_path(str(SCRIPTS / "package-release.py"))["validate_filter_pairing"]
+                validate.__globals__["ROOT"] = root
+                if failure is None:
+                    validate(root / "Filter.systemextension", info, "1.2.3", 4)
+                else:
+                    with self.assertRaises(SystemExit):
+                        validate(root / "Filter.systemextension", info, "1.2.3", 4)
+
     def release_fixture(self, root):
         products = root / "Release"
         products.mkdir()
