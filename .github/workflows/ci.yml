@@ -19,6 +19,7 @@ jobs:
       - run: xcodebuild -project SafariTabsExtension/SafariTabsExtension.xcodeproj -target SafariTabsExtension -configuration Release CODE_SIGNING_ALLOWED=NO build -quiet
       - run: xcodebuild -project FilterExtension/BrowserDaddyFilter.xcodeproj -scheme BrowserDaddyFilter -configuration Release CODE_SIGNING_ALLOWED=NO build -quiet
       - run: node --test scripts/blocking-lists.test.mjs
+      - run: node --test scripts/notary-candidate.test.mjs
       - run: swift build -c release
       - run: python3 -m unittest test_sparkle_support
         working-directory: scripts
