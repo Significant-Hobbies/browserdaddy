@@ -16,10 +16,10 @@ struct BlockingView: View {
                         if controller.extensionBundled {
                             HStack {
                                 Button("Set up system filter") { controller.activate() }
-                                    .disabled(controller.busy)
+                                    .disabled(controller.busy || !controller.ready)
                                 Button(controller.enabled ? "Turn off filter" : "Enable filter") {
                                     controller.setEnabled(!controller.enabled)
-                                }.disabled(controller.busy)
+                                }.disabled(controller.busy || (!controller.ready && !controller.enabled))
                                 Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
                                 if controller.enabled && controller.ready {
                                     Button("Apply saved rules") { controller.setEnabled(true) }.disabled(controller.busy)
@@ -27,11 +27,14 @@ struct BlockingView: View {
                             }
                         }
                         Text(controller.extensionBundled
-                             ? "macOS will ask you to approve the system extension and network filter. Disabling the filter keeps your rules."
+                             ? "macOS will ask you to approve the system extension and network filter. If the filter starts without valid rules, outgoing traffic is blocked until valid rules arrive or you turn off the filter. Disabling the filter keeps your rules."
                              : "Your rules are saved locally. This build needs the signed BrowserDaddy network-filter extension before it can block connections.")
                             .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                         if !controller.error.isEmpty {
                             Text(controller.error).font(.callout).foregroundStyle(BrowserTheme.coral)
+                        }
+                        if !controller.loadError.isEmpty && controller.loadError != controller.error {
+                            Text(controller.loadError).font(.callout).foregroundStyle(BrowserTheme.coral)
                         }
                     }
                 }
@@ -59,6 +62,20 @@ struct BlockingView: View {
                     }
                 }
                 .disabled(!controller.ready || controller.busy)
+                BrowserBand(label: "STRICT PROTECTION", subtitle: "System-wide · may interrupt legitimate apps") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Block outgoing connections with hidden destinations", isOn: Binding(
+                            get: { controller.configuration.strictUnknownDestinations },
+                            set: { selected in
+                                var value = controller.configuration
+                                value.strictUnknownDestinations = selected
+                                controller.save(value)
+                            }))
+                            .toggleStyle(.checkbox)
+                        Text("Applies to every app, including private browser windows. Connections without a usable domain name, including IP-only connections, are blocked. This can break websites, VPNs, updates and other apps. Turn off the filter to recover. Existing connections may continue until closed.")
+                            .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                    }
+                }.disabled(!controller.ready || controller.busy)
                 BrowserBand(label: "SITES", subtitle: "A domain rule also blocks its subdomains") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -87,7 +104,7 @@ struct BlockingView: View {
                 BrowserBand(label: "COVERAGE & PRIVACY", subtitle: "Rules are not a guarantee of complete protection") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("The filter applies to identifiable connections in regular and private windows, and other apps. It does not save visited domains, URLs or a blocked-visit log.")
-                        Text("Unknown domains and connections without an exposed hostname are allowed. Encrypted DNS, VPNs, connection reuse and browser networking can limit coverage. Sites missing from these lists, and adult content on shared sites, may remain accessible.")
+                        Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Strict protection blocks outgoing connections whose destination cannot be identified; otherwise those connections are allowed. VPNs and connection reuse can limit coverage.")
                         Text("Cross-browser protection has not been verified on this Mac. Saved rule changes are sent to macOS when the filter is configured. Delivery and enforcement require runtime verification; existing connections may continue until closed.")
                     }.font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                 }
@@ -107,5 +124,9 @@ struct BlockingView: View {
         }
     }
 
-    private func addSite() { _ = controller.addSite(site) }
+    private func addSite() {
+        if let host = BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)), controller.configuration.sites.contains(host) {
+            site = ""
+        } else { _ = controller.addSite(site) }
+    }
 }

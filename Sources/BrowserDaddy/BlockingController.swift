@@ -16,6 +16,8 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     @Published private(set) var enabled = false
     @Published private(set) var busy = false
     @Published var error = ""
+    @Published private(set) var loadError = ""
+    private var refreshGeneration: UInt64 = 0
     private let preview: Bool
     private var rulesURL: URL?
     private var manager: NEFilterManager { .shared() }
@@ -59,6 +61,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             } catch {
                 busy = false
                 self.error = "Could not load local blocking rules. Editing is disabled to preserve the saved file: \(error.localizedDescription)"
+                loadError = self.error
                 status = "Rules unavailable · saved file preserved"
                 refresh()
             }
@@ -70,12 +73,16 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func refresh() {
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
+        guard !(busy && !ready) else { return }
         guard !pendingApproval else { status = "Approve BrowserDaddy in System Settings → Login Items & Extensions"; return }
         guard !preview else { status = "Preview · filter inactive"; return }
         guard extensionBundled else { status = "Filter not installed in this build"; return }
         manager.loadFromPreferences { [weak self] failure in
             Task { @MainActor in
                 guard let self else { return }
+                guard self.refreshGeneration == generation else { return }
                 if let failure { self.error = failure.localizedDescription; self.status = "Filter status unavailable"; return }
                 let ours = self.manager.providerConfiguration?.filterDataProviderBundleIdentifier == BlockingConfiguration.extensionID
                 self.enabled = ours && self.manager.isEnabled
@@ -86,6 +93,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 let matches = await Task.detached {
                     applied.flatMap { try? BlockingConfiguration.decode($0) } == expected
                 }.value
+                guard self.refreshGeneration == generation else { return }
                 self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply saved rules"
             }
         }
@@ -93,6 +101,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
 
     func save(_ value: BlockingConfiguration) {
         guard ready, !busy, let rulesURL else { return }
+        refreshGeneration &+= 1
         busy = true
         Task {
             do {
@@ -165,11 +174,12 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func setEnabled(_ value: Bool) {
-        guard !preview, !busy, !pendingApproval else { return }
+        guard !preview, !busy, !(value && pendingApproval) else { return }
         guard !value || (ready && payload != nil) else {
-            error = "Load valid local rules before enabling the filter."
+            if error.isEmpty { error = "Load valid local rules before enabling the filter." }
             return
         }
+        refreshGeneration &+= 1
         busy = true
         manager.loadFromPreferences { [weak self] failure in
             Task { @MainActor in

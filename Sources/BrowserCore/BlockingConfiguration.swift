@@ -10,11 +10,34 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public var sites: Set<BlockingHostname> = []
     public var categories: Set<BlockingCategory> = []
     public var lists: [BlockingCategory: Set<BlockingHostname>] = [:]
+    public var strictUnknownDestinations = false
 
     public init() {}
 
+    private enum CodingKeys: String, CodingKey {
+        case version, sites, categories, lists, strictUnknownDestinations
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        sites = try values.decode(Set<BlockingHostname>.self, forKey: .sites)
+        categories = try values.decode(Set<BlockingCategory>.self, forKey: .categories)
+        lists = try values.decode([BlockingCategory: Set<BlockingHostname>].self, forKey: .lists)
+        strictUnknownDestinations = try values.decodeIfPresent(Bool.self, forKey: .strictUnknownDestinations) ?? false
+    }
+
     public var rules: SiteBlockingRules {
         SiteBlockingRules(blockedSites: sites, blockedCategories: categories, categorizedSites: lists)
+    }
+
+    public func blocks(hostname: String?, outgoing: Bool) -> Bool {
+        var host = hostname ?? ""
+        if host.hasSuffix(".") { host.removeLast() }
+        guard BlockingHostname(host) != nil else {
+            return outgoing && strictUnknownDestinations
+        }
+        return rules.decision(for: host) == .blocked
     }
 
     public static func load(from url: URL) throws -> Self {
@@ -26,14 +49,22 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumProviderBytes else { throw CocoaError(.fileReadTooLarge) }
         let value = try JSONDecoder().decode(Self.self, from: data)
-        guard value.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
+        try value.validate()
         return value
     }
 
     public func providerData() throws -> Data {
+        try validate()
         let data = try JSONEncoder().encode(self)
         guard data.count <= Self.maximumProviderBytes else { throw CocoaError(.fileWriteOutOfSpace) }
         return data
+    }
+
+    private func validate() throws {
+        guard version == 1,
+              categories.allSatisfy({ !(lists[$0]?.isEmpty ?? true) }) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
     }
 
     public func save(to url: URL) throws {
@@ -61,5 +92,17 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         }
         guard !hosts.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
         return hosts
+    }
+}
+
+/// The provider starts closed and swaps only fully validated snapshots.
+public struct BlockingPolicy: Sendable {
+    private let configuration: BlockingConfiguration?
+
+    public init() { configuration = nil }
+    public init(data: Data) throws { configuration = try BlockingConfiguration.decode(data) }
+
+    public func blocks(hostname: String?, outgoing: Bool) -> Bool {
+        configuration?.blocks(hostname: hostname, outgoing: outgoing) ?? outgoing
     }
 }

@@ -3,7 +3,7 @@ import NetworkExtension
 
 final class FilterDataProvider: NEFilterDataProvider {
     private let lock = NSLock()
-    private var configuration = BlockingConfiguration()
+    private var policy = BlockingPolicy()
     private var configurationObservation: NSKeyValueObservation?
     private let rulesQueue = DispatchQueue(label: "BrowserDaddy.filter.configuration")
 
@@ -14,10 +14,7 @@ final class FilterDataProvider: NEFilterDataProvider {
             }
             try rulesQueue.sync { try reload() }
             completionHandler(nil)
-        } catch {
-            configurationObservation = nil
-            completionHandler(error)
-        }
+        } catch { completionHandler(nil) }
     }
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -29,19 +26,17 @@ final class FilterDataProvider: NEFilterDataProvider {
         guard let data = filterConfiguration.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        let next = try BlockingConfiguration.decode(data)
+        let next = try BlockingPolicy(data: data)
         lock.lock()
-        configuration = next
+        policy = next
         lock.unlock()
     }
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
         let host = flow.url?.host ?? (flow as? NEFilterSocketFlow)?.remoteHostname
-        guard var host else { return .allow() }
-        if host.hasSuffix(".") { host.removeLast() }
         lock.lock()
-        let rules = configuration.rules
+        let policy = self.policy
         lock.unlock()
-        return rules.decision(for: host) == .blocked ? .drop() : .allow()
+        return policy.blocks(hostname: host, outgoing: flow.direction == .outbound) ? .drop() : .allow()
     }
 }
