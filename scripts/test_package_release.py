@@ -28,8 +28,10 @@ class ResourcePackagingTests(unittest.TestCase):
         assets.mkdir(parents=True)
         resources = products / "BrowserDaddy_BrowserDaddy.bundle/Contents/Resources"
         resources.mkdir(parents=True)
-        for name in ("BrowserDaddyIcon.png", "BrowserDaddyScout.png"):
-            (assets / name).write_bytes(b"synthetic artwork")
+        for name in ("BrowserDaddyIcon.png", "BrowserDaddyScout.png", "Adult.txt", "Gambling.txt", "LICENSE.txt", "SOURCE.json"):
+            source = assets if name.endswith(".png") else assets / "BlockingLists"
+            source.mkdir(exist_ok=True)
+            (source / name).write_bytes(b"synthetic artwork")
             (resources / name).write_bytes(b"synthetic artwork")
         support = root / "Support"
         support.mkdir()
@@ -130,6 +132,29 @@ class ResourcePackagingTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.run_release(root, products)
                 self.assertFalse((root / "output").exists())
+
+    def test_filter_packaging_requires_both_extension_and_profile(self):
+        namespace = runpy.run_path(str(SCRIPTS / "package-release.py"))
+        for flag in ("--filter-extension", "--filter-host-profile"):
+            args = ["package-release.py", "--products", "/tmp/nonexistent", "--output", "/tmp/unused",
+                    "--identity", "synthetic", "--version", "1.2.3", "--build", "4", flag, "/tmp/unused"]
+            with patch.object(sys, "argv", args):
+                with self.assertRaisesRegex(SystemExit, "requires both"):
+                    namespace["main"]()
+
+    def test_filter_signature_requires_developer_id_and_expected_team(self):
+        validate = runpy.run_path(str(SCRIPTS / "package-release.py"))["validate_filter_signature"]
+        for output, accepted in [
+            ("Signature=adhoc\nTeamIdentifier=not set\n", False),
+            ("Authority=Developer ID Application: Example\nTeamIdentifier=OTHERTEAM\n", False),
+            ("Authority=Developer ID Application: Example\nTeamIdentifier=8F7LXHTJZR\n", True),
+        ]:
+            with self.subTest(output=output), patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", output)):
+                if accepted:
+                    validate(Path("synthetic.app"))
+                else:
+                    with self.assertRaises(SystemExit):
+                        validate(Path("synthetic.app"))
 
     def test_local_assembly_copies_bundle_and_fails_when_missing(self):
         for missing in (False, True):

@@ -1,0 +1,28 @@
+name: BrowserDaddyFilter
+options:
+  bundleIdPrefix: com.significanthobbies.browserdaddy
+schemes:
+  BrowserDaddyFilter:
+    build:
+      targets:
+        BrowserDaddyFilter: all
+targets:
+  BrowserDaddyFilter:
+    type: system-extension
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+      - path: FilterDataProvider.swift
+      - path: main.swift
+      - path: ../Sources/BrowserCore/SiteBlocking.swift
+      - path: ../Sources/BrowserCore/BlockingConfiguration.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.significanthobbies.browserdaddy.filter
+        PRODUCT_NAME: com.significanthobbies.browserdaddy.filter
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: Entitlements.plist
+        SWIFT_VERSION: '5.0'
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        CODE_SIGNING_ALLOWED: NO

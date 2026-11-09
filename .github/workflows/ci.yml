@@ -17,8 +17,12 @@ jobs:
       - run: python3 scripts/check-daddy-foundation.py --app browserdaddy
       - run: swift test
       - run: xcodebuild -project SafariTabsExtension/SafariTabsExtension.xcodeproj -target SafariTabsExtension -configuration Release CODE_SIGNING_ALLOWED=NO build -quiet
+      - run: xcodebuild -project FilterExtension/BrowserDaddyFilter.xcodeproj -scheme BrowserDaddyFilter -configuration Release CODE_SIGNING_ALLOWED=NO build -quiet
+      - run: node --test scripts/blocking-lists.test.mjs
       - run: swift build -c release
       - run: python3 -m unittest test_sparkle_support
+        working-directory: scripts
+      - run: python3 -m unittest test_package_release
         working-directory: scripts
       - run: node --test worker.test.mjs
         working-directory: site
