@@ -102,6 +102,6 @@ final class BlockingConfigurationTests: XCTestCase {
             XCTAssertGreaterThan(hosts.count, 100)
             config.lists[name == "Adult" ? .adult : .gambling] = hosts
         }
-        XCTAssertLessThan(try config.providerData().count, BlockingConfiguration.maximumProviderBytes)
+        XCTAssertLessThan(try config.providerData().count, 480 * 1024)
     }
 }
