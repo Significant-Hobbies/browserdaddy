@@ -72,7 +72,7 @@ struct BlockingView: View {
                                 controller.save(value)
                             }))
                             .toggleStyle(.checkbox)
-                        Text("Applies to every app, including private browser windows. Connections without a usable domain name, including IP-only connections, are blocked. This can break websites, VPNs, updates and other apps. Turn off the filter to recover. Existing connections may continue until closed.")
+                        Text("Applies to every app, including private browser windows. Hidden destinations, IP-only connections, DNS lookups and local app connections can be blocked. This may stop all internet access or entire browsers. Turn off the filter to recover. Existing connections may continue until closed.")
                             .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                     }
                 }.disabled(!controller.ready || controller.busy)
@@ -104,7 +104,7 @@ struct BlockingView: View {
                 BrowserBand(label: "COVERAGE & PRIVACY", subtitle: "Rules are not a guarantee of complete protection") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("The filter applies to identifiable connections in regular and private windows, and other apps. It does not save visited domains, URLs or a blocked-visit log.")
-                        Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Strict protection blocks outgoing connections whose destination cannot be identified; otherwise those connections are allowed. VPNs and connection reuse can limit coverage.")
+                        Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Strict protection blocks outgoing connections whose destination cannot be identified; otherwise those connections are allowed. Encrypted DNS, browser networking, VPNs and connection reuse can limit coverage.")
                         Text("Cross-browser protection has not been verified on this Mac. Saved rule changes are sent to macOS when the filter is configured. Delivery and enforcement require runtime verification; existing connections may continue until closed.")
                     }.font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                 }

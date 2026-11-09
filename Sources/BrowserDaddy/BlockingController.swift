@@ -4,6 +4,78 @@ import NetworkExtension
 import SystemExtensions
 import SwiftUI
 
+struct BlockingFilterState: Sendable {
+    let enabled: Bool
+    let payload: Data?
+}
+
+@MainActor
+protocol BlockingPreferences {
+    func load() async throws -> BlockingFilterState
+    func save(enabled: Bool, payload: Data?) async throws
+}
+
+@MainActor
+private final class SystemBlockingPreferences: BlockingPreferences {
+    private let manager = NEFilterManager.shared()
+    private var tail: Task<Void, Never>?
+
+    func load() async throws -> BlockingFilterState {
+        try await serial { try await self.loadCurrent() }
+    }
+
+    private func serial<T: Sendable>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+        let previous = tail
+        let work = Task {
+            await previous?.value
+            return try await operation()
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
+    private func loadCurrent() async throws -> BlockingFilterState {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            manager.loadFromPreferences { error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
+            }
+        }
+        let ours = manager.providerConfiguration?.filterDataProviderBundleIdentifier == BlockingConfiguration.extensionID
+        return BlockingFilterState(enabled: ours && manager.isEnabled,
+                                   payload: ours ? manager.providerConfiguration?.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data : nil)
+    }
+
+    func save(enabled: Bool, payload: Data?) async throws {
+        try await serial { try await self.saveCurrent(enabled: enabled, payload: payload) }
+    }
+
+    private func saveCurrent(enabled: Bool, payload: Data?) async throws {
+        _ = try await loadCurrent()
+        if let existing = manager.providerConfiguration,
+           existing.filterDataProviderBundleIdentifier != BlockingConfiguration.extensionID {
+            throw NSError(domain: "Blocking", code: 1, userInfo: [NSLocalizedDescriptionKey: "Another filter configuration is present. It was not changed."])
+        }
+        if enabled {
+            guard let payload else { throw CocoaError(.fileReadCorruptFile) }
+            let config = NEFilterProviderConfiguration()
+            config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
+            config.filterBrowsers = true
+            config.filterSockets = true
+            config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
+            manager.providerConfiguration = config
+        }
+        manager.localizedDescription = "BrowserDaddy site blocking"
+        manager.isEnabled = enabled
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            manager.saveToPreferences { error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
+            }
+        }
+    }
+}
+
 @MainActor
 final class BlockingController: NSObject, ObservableObject, OSSystemExtensionRequestDelegate {
     static let shared = BlockingController()
@@ -20,9 +92,13 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     private var refreshGeneration: UInt64 = 0
     private let preview: Bool
     private var rulesURL: URL?
-    private var manager: NEFilterManager { .shared() }
+    private let preferences: any BlockingPreferences
+    private let extensionAvailable: Bool?
 
-    init(rulesURL suppliedURL: URL? = nil, preview suppliedPreview: Bool? = nil) {
+    init(rulesURL suppliedURL: URL? = nil, preview suppliedPreview: Bool? = nil,
+         preferences: (any BlockingPreferences)? = nil, extensionAvailable: Bool? = nil) {
+        self.preferences = preferences ?? SystemBlockingPreferences()
+        self.extensionAvailable = extensionAvailable
         preview = suppliedPreview ?? (CommandLine.arguments.contains("--preview-fixture")
             || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true)
         super.init()
@@ -69,32 +145,35 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     var extensionBundled: Bool {
-        FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
+        extensionAvailable ?? FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
     }
 
-    func refresh() {
+    func refresh(applySavedRules: Bool = false) {
         refreshGeneration &+= 1
         let generation = refreshGeneration
         guard !(busy && !ready) else { return }
         guard !pendingApproval else { status = "Approve BrowserDaddy in System Settings → Login Items & Extensions"; return }
         guard !preview else { status = "Preview · filter inactive"; return }
         guard extensionBundled else { status = "Filter not installed in this build"; return }
-        manager.loadFromPreferences { [weak self] failure in
-            Task { @MainActor in
-                guard let self else { return }
-                guard self.refreshGeneration == generation else { return }
-                if let failure { self.error = failure.localizedDescription; self.status = "Filter status unavailable"; return }
-                let ours = self.manager.providerConfiguration?.filterDataProviderBundleIdentifier == BlockingConfiguration.extensionID
-                self.enabled = ours && self.manager.isEnabled
+        Task {
+            do {
+                let state = try await preferences.load()
+                guard refreshGeneration == generation else { return }
+                enabled = state.enabled
+                if applySavedRules && enabled { setEnabled(true); return }
                 guard self.enabled else { self.status = "Filter off"; return }
                 guard self.ready else { self.status = "Filter configured · local rules unavailable"; return }
-                let applied = self.manager.providerConfiguration?.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data
+                let applied = state.payload
                 let expected = self.configuration
                 let matches = await Task.detached {
                     applied.flatMap { try? BlockingConfiguration.decode($0) } == expected
                 }.value
                 guard self.refreshGeneration == generation else { return }
                 self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply saved rules"
+            } catch {
+                guard refreshGeneration == generation else { return }
+                self.error = error.localizedDescription
+                status = "Filter status unavailable"
             }
         }
     }
@@ -114,10 +193,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 payload = data
                 error = ""
                 busy = false
-                if enabled { setEnabled(true) }
+                refresh(applySavedRules: true)
             } catch {
                 busy = false
                 self.error = "Rules were not saved: \(error.localizedDescription)"
+                refresh()
             }
         }
     }
@@ -181,29 +261,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         }
         refreshGeneration &+= 1
         busy = true
-        manager.loadFromPreferences { [weak self] failure in
-            Task { @MainActor in
-                guard let self else { return }
-                if let failure { self.finish(failure); return }
-                if let existing = self.manager.providerConfiguration,
-                   existing.filterDataProviderBundleIdentifier != BlockingConfiguration.extensionID {
-                    self.finish(NSError(domain: "Blocking", code: 1, userInfo: [NSLocalizedDescriptionKey: "Another filter configuration is present. It was not changed."]))
-                    return
-                }
-                if value, let payload = self.payload {
-                    let config = NEFilterProviderConfiguration()
-                    config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
-                    config.filterBrowsers = true
-                    config.filterSockets = true
-                    config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
-                    self.manager.providerConfiguration = config
-                }
-                self.manager.localizedDescription = "BrowserDaddy site blocking"
-                self.manager.isEnabled = value
-                self.manager.saveToPreferences { failure in
-                    Task { @MainActor in self.finish(failure) }
-                }
-            }
+        Task {
+            do {
+                try await preferences.save(enabled: value, payload: value ? payload : nil)
+                finish(nil)
+            } catch { finish(error) }
         }
     }
 
