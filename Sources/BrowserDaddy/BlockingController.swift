@@ -16,15 +16,9 @@ protocol BlockingPreferences {
 }
 
 @MainActor
-private final class SystemBlockingPreferences: BlockingPreferences {
-    private let manager = NEFilterManager.shared()
+final class BlockingPreferenceQueue {
     private var tail: Task<Void, Never>?
-
-    func load() async throws -> BlockingFilterState {
-        try await serial { try await self.loadCurrent() }
-    }
-
-    private func serial<T: Sendable>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+    func run<T: Sendable>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {
         let previous = tail
         let work = Task {
             await previous?.value
@@ -32,6 +26,16 @@ private final class SystemBlockingPreferences: BlockingPreferences {
         }
         tail = Task { _ = try? await work.value }
         return try await work.value
+    }
+}
+
+@MainActor
+private final class SystemBlockingPreferences: BlockingPreferences {
+    private let manager = NEFilterManager.shared()
+    private let queue = BlockingPreferenceQueue()
+
+    func load() async throws -> BlockingFilterState {
+        try await queue.run { try await self.loadCurrent() }
     }
 
     private func loadCurrent() async throws -> BlockingFilterState {
@@ -47,7 +51,7 @@ private final class SystemBlockingPreferences: BlockingPreferences {
     }
 
     func save(enabled: Bool, payload: Data?) async throws {
-        try await serial { try await self.saveCurrent(enabled: enabled, payload: payload) }
+        try await queue.run { try await self.saveCurrent(enabled: enabled, payload: payload) }
     }
 
     private func saveCurrent(enabled: Bool, payload: Data?) async throws {
@@ -78,6 +82,8 @@ private final class SystemBlockingPreferences: BlockingPreferences {
 
 @MainActor
 final class BlockingController: NSObject, ObservableObject, OSSystemExtensionRequestDelegate {
+    private enum RuleDelivery { case current, pending, failed }
+    private var ruleDelivery = RuleDelivery.current
     static let shared = BlockingController()
     @Published private(set) var ready = false
     private var pendingApproval = false
@@ -148,7 +154,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         extensionAvailable ?? FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
     }
 
-    func refresh(applySavedRules: Bool = false) {
+    func refresh() {
         refreshGeneration &+= 1
         let generation = refreshGeneration
         guard !(busy && !ready) else { return }
@@ -160,8 +166,12 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 let state = try await preferences.load()
                 guard refreshGeneration == generation else { return }
                 enabled = state.enabled
-                if applySavedRules && enabled { setEnabled(true); return }
-                guard self.enabled else { self.status = "Filter off"; return }
+                if ruleDelivery == .pending && enabled && !busy { setEnabled(true); return }
+                guard self.enabled else {
+                    ruleDelivery = .current
+                    self.status = "Filter off"
+                    return
+                }
                 guard self.ready else { self.status = "Filter configured · local rules unavailable"; return }
                 let applied = state.payload
                 let expected = self.configuration
@@ -172,7 +182,9 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply saved rules"
             } catch {
                 guard refreshGeneration == generation else { return }
-                self.error = error.localizedDescription
+                let message = "Could not read filter preferences: \(error.localizedDescription)"
+                if self.error.isEmpty { self.error = message }
+                else if !self.error.contains(message) { self.error += " " + message }
                 status = "Filter status unavailable"
             }
         }
@@ -191,9 +203,10 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 }.value
                 configuration = value
                 payload = data
+                ruleDelivery = .pending
                 error = ""
                 busy = false
-                refresh(applySavedRules: true)
+                refresh()
             } catch {
                 busy = false
                 self.error = "Rules were not saved: \(error.localizedDescription)"
@@ -239,6 +252,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             } catch {
                 busy = false
                 self.error = "List was not imported. Use a nonempty domain or hosts list under 32 MB."
+                refresh()
             }
         }
     }
@@ -264,8 +278,12 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         Task {
             do {
                 try await preferences.save(enabled: value, payload: value ? payload : nil)
+                ruleDelivery = .current
                 finish(nil)
-            } catch { finish(error) }
+            } catch {
+                ruleDelivery = .failed
+                finish(error)
+            }
         }
     }
 
