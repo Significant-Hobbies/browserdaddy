@@ -49,9 +49,7 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public func blocks(hostname: String?, outgoing: Bool, at date: Date = Date(), timeZone: TimeZone = .autoupdatingCurrent) -> Bool {
         var host = hostname ?? ""
         if host.hasSuffix(".") { host.removeLast() }
-        guard BlockingHostname(host) != nil else {
-            return outgoing && strictUnknownDestinations
-        }
+        guard BlockingHostname(host) != nil else { return false }
         return rules.decision(for: host) == .blocked
             || scheduledSites.contains { $0.matches(hostname: host) && $0.isActive(at: date, timeZone: timeZone) }
     }
@@ -192,7 +190,6 @@ public struct CommittedBlockingRules: Sendable, Equatable {
     public init(preserving configurations: [BlockingConfiguration] = [], catalog: BlockingListCatalog = .main) throws {
         var result = BlockingConfiguration()
         result.categories = Set(BlockingCategory.allCases)
-        result.strictUnknownDestinations = true
         result.sites = Self.protectedSites
         for category in BlockingCategory.allCases {
             result.lists[category] = try catalog.resolve(category, sha256: BlockingListCatalog.rawDigests[category]!)
@@ -242,7 +239,7 @@ public struct CommittedBlockingRules: Sendable, Equatable {
             categories: configuration.categories,
             sources: Dictionary(uniqueKeysWithValues: BlockingCategory.allCases.map {
                 ($0, .bundled(sha256: BlockingListCatalog.rawDigests[$0]!))
-            }), strictUnknownDestinations: true, scheduledSites: configuration.scheduledSites)
+            }), strictUnknownDestinations: false, scheduledSites: configuration.scheduledSites)
         return try CommittedBlockingPayload(data: JSONEncoder().encode(value))
     }
 
@@ -282,9 +279,11 @@ public struct CommittedBlockingPayload: Sendable {
     }
 }
 
-/// The provider starts closed and swaps only fully validated snapshots.
+/// Invalid snapshots retain the compiled site baseline without interrupting other networking.
 public struct BlockingPolicy: Sendable {
     private let configuration: BlockingConfiguration?
+    public var hasValidConfiguration: Bool { configuration != nil }
+    private static let baseline = SiteBlockingRules(blockedSites: CommittedBlockingRules.protectedSites)
 
     public init() { configuration = nil }
     public init(data: Data, catalog: BlockingListCatalog = .main) throws {
@@ -308,7 +307,12 @@ public struct BlockingPolicy: Sendable {
     }
 
     public func blocks(hostname: String?, outgoing: Bool, at date: Date = Date(), timeZone: TimeZone = .autoupdatingCurrent) -> Bool {
-        configuration?.blocks(hostname: hostname, outgoing: outgoing, at: date, timeZone: timeZone) ?? outgoing
+        if let configuration {
+            return configuration.blocks(hostname: hostname, outgoing: outgoing, at: date, timeZone: timeZone)
+        }
+        var hostname = hostname ?? ""
+        if hostname.hasSuffix(".") { hostname.removeLast() }
+        return outgoing && Self.baseline.decision(for: hostname) == .blocked
     }
 
     /// Resolve wall-clock activity once for a batch of open scheduled connections.

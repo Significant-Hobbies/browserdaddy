@@ -46,6 +46,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     private func reload() {
         let next = BlockingPolicy(vendorConfiguration: filterConfiguration.vendorConfiguration)
+        guard next.hasValidConfiguration else { return }
         lock.lock()
         guard running else { lock.unlock(); return }
         policy = next
@@ -71,24 +72,28 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
         let host = flow.url?.host ?? (flow as? NEFilterSocketFlow)?.remoteHostname
-        lock.lock()
-        let currentPolicy = policy
-        let currentGeneration = generation
-        let isRunning = running
-        lock.unlock()
-        guard isRunning else { return .drop() }
-        let blocked = currentPolicy.blocks(hostname: host, outgoing: flow.direction == .outbound)
-        let scheduled = currentPolicy.hasSchedule(hostname: host)
-        lock.lock()
-        defer { lock.unlock() }
-        // A reload during evaluation must not allow a flow under stale rules.
-        guard running, generation == currentGeneration, !blocked else { return .drop() }
-        guard scheduled else { return .allow() }
-        guard let socket = flow as? NEFilterSocketFlow, let host else { return .drop() }
-        guard scheduledFlows.insert(socket, id: socket.identifier, hostname: host) else { return .drop() }
-        let verdict = NEFilterNewFlowVerdict.allow()
-        verdict.shouldReport = true
-        return verdict
+        for _ in 0..<2 {
+            lock.lock()
+            let currentPolicy = policy
+            let currentGeneration = generation
+            let isRunning = running
+            lock.unlock()
+            guard isRunning else { return .allow() }
+            let blocked = currentPolicy.blocks(hostname: host, outgoing: flow.direction == .outbound)
+            let scheduled = currentPolicy.hasSchedule(hostname: host)
+            lock.lock()
+            guard running else { lock.unlock(); return .allow() }
+            guard generation == currentGeneration else { lock.unlock(); continue }
+            defer { lock.unlock() }
+            guard !blocked else { return .drop() }
+            guard scheduled else { return .allow() }
+            guard let socket = flow as? NEFilterSocketFlow, let host else { return .allow() }
+            guard scheduledFlows.insert(socket, id: socket.identifier, hostname: host) else { return .drop() }
+            let verdict = NEFilterNewFlowVerdict.allow()
+            verdict.shouldReport = true
+            return verdict
+        }
+        return .allow()
     }
 
     override func handle(_ report: NEFilterReport) {

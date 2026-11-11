@@ -61,10 +61,12 @@ final class ScheduledSiteBlockTests: XCTestCase {
 
     func testCommittedUnionRoundTripsAndFloorAlwaysDominatesSchedule() throws {
         var local = BlockingConfiguration()
+        local.strictUnknownDestinations = true
         local.scheduledSites = [schedule(), schedule([2], 10, 20, host: "youtube.com")]
         var native = BlockingConfiguration()
         native.scheduledSites = [schedule([3], 60, 120, host: "news.test")]
         let rules = try CommittedBlockingRules(preserving: [local, native], catalog: Self.catalog)
+        XCTAssertFalse(rules.configuration.strictUnknownDestinations)
         XCTAssertEqual(rules.configuration.scheduledSites, local.scheduledSites.union(native.scheduledSites))
         XCTAssertEqual(try BlockingConfiguration.decode(rules.configuration.localData()), rules.configuration)
         let payload = try rules.providerPayload()
@@ -75,7 +77,7 @@ final class ScheduledSiteBlockTests: XCTestCase {
         XCTAssertFalse(policy.blocks(hostname: "example.com", outgoing: true, at: outside, timeZone: utc))
         XCTAssertTrue(policy.hasSchedule(hostname: "sub.example.com"))
         XCTAssertTrue(policy.blocks(hostname: "sub.example.com", outgoing: true, at: date("2026-11-09T09:00:00Z"), timeZone: utc))
-        XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true, at: outside, timeZone: utc))
+        XCTAssertFalse(policy.blocks(hostname: nil, outgoing: true, at: outside, timeZone: utc))
     }
 
     func testNewVersionsRequireValidNonemptySchedulesAndCannotDowngrade() throws {
@@ -118,7 +120,7 @@ final class ScheduledSiteBlockTests: XCTestCase {
         XCTAssertFalse(flows.insert("overflow", id: overflow, hostname: "example.com"))
         flows.remove(id: first)
         XCTAssertTrue(flows.insert("overflow", id: overflow, hostname: "example.com"))
-        XCTAssertEqual(flows.takeBlocked(by: BlockingPolicy(), at: date("2026-11-09T17:00:00Z"), timeZone: utc), ["overflow"])
+        XCTAssertEqual(flows.takeBlocked(by: BlockingPolicy(), at: date("2026-11-09T17:00:00Z"), timeZone: utc), [])
         flows.removeAll()
         XCTAssertEqual(flows.count, 0)
     }

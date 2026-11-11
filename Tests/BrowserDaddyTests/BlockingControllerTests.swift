@@ -84,7 +84,7 @@ final class BlockingControllerTests: XCTestCase {
                 XCTAssertTrue(controller.configuration.sites.contains(BlockingHostname(host)!))
             }
             XCTAssertEqual(controller.configuration.categories, Set(BlockingCategory.allCases))
-            XCTAssertTrue(controller.configuration.strictUnknownDestinations)
+            XCTAssertFalse(controller.configuration.strictUnknownDestinations)
             XCTAssertEqual(try BlockingConfiguration.load(from: file), controller.configuration)
             XCTAssertEqual(preferences.applyCount, enabled ? 1 : 0)
             if !enabled { controller.enable() }
@@ -135,7 +135,7 @@ final class BlockingControllerTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: file), original)
             XCTAssertEqual(preferences.state.payload, raw)
             XCTAssertEqual(preferences.applyCount, 0)
-            XCTAssertTrue(controller.loadError.contains("may block all outgoing traffic"))
+            XCTAssertTrue(controller.loadError.contains("keeps its last valid rules"))
             controller.enable()
             XCTAssertEqual(preferences.applyCount, 0)
         }
@@ -447,7 +447,7 @@ final class BlockingControllerTests: XCTestCase {
             let policy = try BlockingPolicy(data: XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
             XCTAssertTrue(policy.blocks(hostname: "valid-adult-extra.test", outgoing: true))
             XCTAssertTrue(policy.blocks(hostname: "youtube.com", outgoing: true))
-            XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: nil, outgoing: true))
             XCTAssertFalse(policy.blocks(hostname: "ordinary-unlisted.test", outgoing: true))
         }
     }
@@ -463,7 +463,7 @@ final class BlockingControllerTests: XCTestCase {
             .replacingOccurrences(of: "4eb9d0d020d546521c4d90485d7c423f6fbb1336e880d003fd08dcce5c7675d3", with: String(repeating: "0", count: 64)).utf8)
         XCTAssertThrowsError(try BlockingConfiguration.decodeProvider(raw, catalog: Self.catalog))
         let closed = BlockingPolicy(committedProviderData: raw, catalog: Self.catalog)
-        XCTAssertTrue(closed.blocks(hostname: "unlisted.test", outgoing: true))
+        XCTAssertFalse(closed.blocks(hostname: "unlisted.test", outgoing: true))
         let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: false, payload: raw))
         let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
             extensionAvailable: true, extensionActivation: { $0() })
@@ -483,7 +483,7 @@ final class BlockingControllerTests: XCTestCase {
         XCTAssertEqual(applied, controller.configuration)
         XCTAssertTrue(applied.blocks(hostname: "inline-extra.test", outgoing: true))
         XCTAssertTrue(applied.blocks(hostname: "native-only.test", outgoing: true))
-        XCTAssertTrue(applied.strictUnknownDestinations)
+        XCTAssertFalse(applied.strictUnknownDestinations)
     }
 
     @MainActor
@@ -509,7 +509,7 @@ final class BlockingControllerTests: XCTestCase {
         let repaired = try BlockingPolicy(data: XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
         XCTAssertFalse(repaired.blocks(hostname: "ordinary-unlisted.test", outgoing: true))
         XCTAssertTrue(repaired.blocks(hostname: "youtube.com", outgoing: true))
-        XCTAssertTrue(repaired.blocks(hostname: nil, outgoing: true))
+        XCTAssertFalse(repaired.blocks(hostname: nil, outgoing: true))
         for _ in 0..<3 { controller.refresh(); await Task.yield() }
         try await waitUntil { !controller.busy }
         XCTAssertEqual(preferences.applyCount, 1)
