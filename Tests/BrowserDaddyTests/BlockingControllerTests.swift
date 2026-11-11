@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 import BrowserCore
 import NetworkExtension
 import SystemExtensions
@@ -40,8 +41,13 @@ final class BlockingControllerTests: XCTestCase {
                 extensionAvailable: true, extensionActivation: { _ in XCTFail("An upgrade must not automatically activate the filter") })
             let expected = enabled ? "Saved rules differ from filter" : "Filter disabled in macOS"
             try await waitUntil { controller.ready && !controller.busy && controller.status.contains(expected) }
+            var completedRefreshes = 0
+            let observation = controller.$status.dropFirst().sink { status in
+                if status.contains(expected) { completedRefreshes += 1 }
+            }
+            defer { observation.cancel() }
             controller.refresh()
-            try await waitUntil { controller.status.contains(expected) }
+            try await waitUntil { completedRefreshes == 1 }
             XCTAssertEqual(preferences.applyCount, 0)
             XCTAssertEqual(preferences.state.enabled, enabled)
             XCTAssertEqual(preferences.state.payload, original)
