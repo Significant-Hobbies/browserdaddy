@@ -32,7 +32,7 @@ struct BlockingView: View {
                             }
                         }
                         Text(controller.extensionBundled
-                             ? "macOS will ask you to approve the system extension and network filter. Protection is committed in this app. You can add blocked websites; changes to protected settings require deliberate maintenance requested through Codex chat. If new rules cannot load, the running filter keeps its last valid rules. On first start, only the built-in website rules are available until valid rules load."
+                             ? "macOS will ask you to approve the system extension and network filter. Protection is committed in this app. You can add blocked websites; changes to protected settings require deliberate maintenance requested through Codex chat. If new rules cannot load, the running filter keeps its last valid rules. If the filter restarts without valid rules, only its built-in website rules are available until valid rules load."
                              : "Your rules are saved locally. This build needs the signed BrowserDaddy network-filter extension before it can block connections.")
                             .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                         if !controller.error.isEmpty {

@@ -5,7 +5,6 @@ final class FilterDataProvider: NEFilterDataProvider {
     private let lock = NSLock()
     private var policy = BlockingPolicy()
     private var running = false
-    private var generation: UInt64 = 0
     private var scheduledFlows = ScheduledFlowRegistry<NEFilterSocketFlow>()
     private var configurationObservation: NSKeyValueObservation?
     private let rulesQueue = DispatchQueue(label: "BrowserDaddy.filter.configuration")
@@ -33,7 +32,6 @@ final class FilterDataProvider: NEFilterDataProvider {
         configurationObservation = nil
         lock.lock()
         running = false
-        generation &+= 1
         policy = BlockingPolicy()
         scheduledFlows.removeAll()
         lock.unlock()
@@ -50,7 +48,6 @@ final class FilterDataProvider: NEFilterDataProvider {
         lock.lock()
         guard running else { lock.unlock(); return }
         policy = next
-        generation &+= 1
         lock.unlock()
         reevaluateScheduledFlows()
     }
@@ -72,28 +69,16 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
         let host = flow.url?.host ?? (flow as? NEFilterSocketFlow)?.remoteHostname
-        for _ in 0..<2 {
-            lock.lock()
-            let currentPolicy = policy
-            let currentGeneration = generation
-            let isRunning = running
-            lock.unlock()
-            guard isRunning else { return .allow() }
-            let blocked = currentPolicy.blocks(hostname: host, outgoing: flow.direction == .outbound)
-            let scheduled = currentPolicy.hasSchedule(hostname: host)
-            lock.lock()
-            guard running else { lock.unlock(); return .allow() }
-            guard generation == currentGeneration else { lock.unlock(); continue }
-            defer { lock.unlock() }
-            guard !blocked else { return .drop() }
-            guard scheduled else { return .allow() }
-            guard let socket = flow as? NEFilterSocketFlow, let host else { return .allow() }
-            guard scheduledFlows.insert(socket, id: socket.identifier, hostname: host) else { return .drop() }
-            let verdict = NEFilterNewFlowVerdict.allow()
-            verdict.shouldReport = true
-            return verdict
-        }
-        return .allow()
+        lock.lock()
+        defer { lock.unlock() }
+        guard running else { return .allow() }
+        guard !policy.blocks(hostname: host, outgoing: flow.direction == .outbound) else { return .drop() }
+        guard policy.hasSchedule(hostname: host) else { return .allow() }
+        guard let socket = flow as? NEFilterSocketFlow, let host else { return .allow() }
+        guard scheduledFlows.insert(socket, id: socket.identifier, hostname: host) else { return .drop() }
+        let verdict = NEFilterNewFlowVerdict.allow()
+        verdict.shouldReport = true
+        return verdict
     }
 
     override func handle(_ report: NEFilterReport) {

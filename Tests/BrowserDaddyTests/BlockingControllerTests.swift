@@ -28,6 +28,28 @@ final class BlockingControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testLegacyStrictUpgradeRequiresExplicitApplyWithoutChangingEnabledState() async throws {
+        for enabled in [false, true] {
+            let file = try rulesFile()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            var legacy = try CommittedBlockingRules(catalog: Self.catalog).configuration
+            legacy.strictUnknownDestinations = true
+            let original = try legacy.providerData()
+            let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: enabled, payload: original))
+            let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+                extensionAvailable: true, extensionActivation: { _ in XCTFail("An upgrade must not automatically activate the filter") })
+            let expected = enabled ? "Saved rules differ from filter" : "Filter disabled in macOS"
+            try await waitUntil { controller.ready && !controller.busy && controller.status.contains(expected) }
+            controller.refresh()
+            try await waitUntil { controller.status.contains(expected) }
+            XCTAssertEqual(preferences.applyCount, 0)
+            XCTAssertEqual(preferences.state.enabled, enabled)
+            XCTAssertEqual(preferences.state.payload, original)
+            XCTAssertFalse(controller.configuration.strictUnknownDestinations)
+        }
+    }
+
+    @MainActor
     func testScheduledAdditionPreservesLocalAndNativeRulesAndApplies() async throws {
         let file = try rulesFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
