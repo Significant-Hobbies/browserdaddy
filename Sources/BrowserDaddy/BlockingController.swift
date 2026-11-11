@@ -279,7 +279,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 refresh()
             } catch {
                 busy = false
-                self.error = "Could not prepare protected blocking rules. Saved data is preserved and editing is unavailable. The protected filter may block all outgoing traffic until valid rules are restored. Refresh status to retry; assisted Codex maintenance may be required: \(error.localizedDescription)"
+                self.error = "Could not prepare protected blocking rules. Saved data is preserved and editing is unavailable. The running filter keeps its last valid rules; a filter without valid rules protects only the built-in websites. Refresh status to retry; assisted Codex maintenance may be required: \(error.localizedDescription)"
                 loadError = self.error
                 status = "Rules unavailable · saved file preserved"
             }

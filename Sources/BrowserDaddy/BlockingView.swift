@@ -32,7 +32,7 @@ struct BlockingView: View {
                             }
                         }
                         Text(controller.extensionBundled
-                             ? "macOS will ask you to approve the system extension and network filter. Protection is committed in this app. You can add blocked websites; changes to protected settings require deliberate maintenance requested through Codex chat. Invalid rules block outgoing traffic until valid protected rules arrive."
+                             ? "macOS will ask you to approve the system extension and network filter. Protection is committed in this app. You can add blocked websites; changes to protected settings require deliberate maintenance requested through Codex chat. If new rules cannot load, the running filter keeps its last valid rules. If the filter restarts without valid rules, only its built-in website rules are available until valid rules load."
                              : "Your rules are saved locally. This build needs the signed BrowserDaddy network-filter extension before it can block connections.")
                             .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                         if !controller.error.isEmpty {
@@ -65,10 +65,10 @@ struct BlockingView: View {
                     }
                 }
                 .disabled(!controller.ready || controller.busy)
-                BrowserBand(label: "STRICT PROTECTION", subtitle: "System-wide · may interrupt legitimate apps") {
+                BrowserBand(label: "DOMAIN PROTECTION", subtitle: "Local rules · normal networking stays available") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("Outgoing connections with hidden destinations are blocked", systemImage: "checkmark.shield.fill")
-                        Text("Applies to every app, including private browser windows. Hidden destinations, IP-only connections, DNS lookups and local app connections can be blocked. This may stop all internet access or entire browsers. Protected settings require assisted maintenance through Codex chat. Existing connections may continue until closed.")
+                        Label("Connections to identified blocked domains are stopped", systemImage: "checkmark.shield.fill")
+                        Text("The filter checks domain names supplied by macOS without inspecting page content or looking up categories online. Connections without an identifiable domain, including IP-only and local app connections, pass through. Protected settings require assisted maintenance through Codex chat. Existing connections may continue until closed.")
                             .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
                     }
                 }.disabled(!controller.ready || controller.busy)
@@ -96,7 +96,7 @@ struct BlockingView: View {
                 BrowserBand(label: "COVERAGE & PRIVACY", subtitle: "Rules are not a guarantee of complete protection") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("The filter applies to identifiable connections in regular and private windows, and other apps. It does not save visited domains, URLs or a blocked-visit log.")
-                        Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Strict protection always blocks outgoing connections whose destination cannot be identified. Encrypted DNS, browser networking, VPNs and connection reuse can limit coverage.")
+                        Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Unidentified destinations are allowed so ordinary networking keeps working. Encrypted DNS, browser networking, VPNs and connection reuse can limit coverage.")
                         Text("A device administrator can disable or remove the system extension through macOS or Recovery. BrowserDaddy does not change those operating-system controls.")
                         Text("Cross-browser protection has not been verified on this Mac. Saved rule changes are sent to macOS when the filter is configured. Delivery and enforcement require runtime verification; existing connections may continue until closed.")
                     }.font(.callout).foregroundStyle(BrowserTheme.secondaryInk)

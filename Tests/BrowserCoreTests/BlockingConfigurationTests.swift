@@ -2,6 +2,37 @@ import XCTest
 @testable import BrowserCore
 
 final class BlockingConfigurationTests: XCTestCase {
+    func testLegacyStrictRulesDoNotBlockUnidentifiedNetworkTraffic() throws {
+        var configuration = BlockingConfiguration()
+        configuration.strictUnknownDestinations = true
+        configuration.sites = [BlockingHostname("blocked.test")!]
+        let policy = try BlockingPolicy(data: configuration.providerData(), catalog: Self.catalog)
+        XCTAssertTrue(policy.hasValidConfiguration)
+        for hostname in [nil, "", "127.0.0.1", "::1", "192.168.1.1", "8.8.8.8", "example..com"] as [String?] {
+            XCTAssertFalse(configuration.blocks(hostname: hostname, outgoing: true), "\(String(describing: hostname))")
+            XCTAssertFalse(policy.blocks(hostname: hostname, outgoing: true), "\(String(describing: hostname))")
+        }
+        XCTAssertTrue(policy.blocks(hostname: "sub.blocked.test", outgoing: true))
+        XCTAssertTrue(policy.blocks(hostname: "youtube.com", outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: "ordinary.test", outgoing: true))
+    }
+
+    func testUnavailablePolicyKeepsBaselineWithoutBlockingTheInternet() {
+        let policies = [BlockingPolicy(), BlockingPolicy(committedProviderData: nil),
+            BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: Data("corrupt".utf8)])]
+        for policy in policies {
+            XCTAssertFalse(policy.hasValidConfiguration)
+            for hostname in [nil, "8.8.8.8", "127.0.0.1", "ordinary.test"] as [String?] {
+                XCTAssertFalse(policy.blocks(hostname: hostname, outgoing: true), "\(String(describing: hostname))")
+            }
+            for hostname in ["youtube.com", "youtu.be", "youtube-nocookie.com", "reddit.com", "redd.it", "instagram.com"] {
+                XCTAssertTrue(policy.blocks(hostname: "sub." + hostname, outgoing: true))
+            }
+            XCTAssertFalse(policy.blocks(hostname: "youtube.com.allowed.test", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "youtube.com", outgoing: false))
+        }
+    }
+
     func testWeakValidNativeV2CannotRemoveCommittedProtection() throws {
         let data = try BlockingConfiguration().providerData()
         let policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: data], catalog: Self.catalog)
@@ -13,7 +44,7 @@ final class BlockingConfigurationTests: XCTestCase {
             let domain = try XCTUnwrap(full.lists[category]?.first)
             XCTAssertTrue(policy.blocks(hostname: domain.value, outgoing: true), category.rawValue)
         }
-        XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: nil, outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
     }
 
@@ -37,7 +68,7 @@ final class BlockingConfigurationTests: XCTestCase {
             XCTAssertFalse(policy.blocks(hostname: "inactive.test", outgoing: true))
             XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
             for domain in [nil, "127.0.0.1", "::1"] as [String?] {
-                XCTAssertTrue(policy.blocks(hostname: domain, outgoing: true))
+                XCTAssertFalse(policy.blocks(hostname: domain, outgoing: true))
                 XCTAssertFalse(policy.blocks(hostname: domain, outgoing: false))
             }
         }
@@ -45,7 +76,7 @@ final class BlockingConfigurationTests: XCTestCase {
             let empty = try BlockingConfiguration().providerData()
             XCTAssertThrowsError(try BlockingPolicy(data: empty, catalog: catalog))
             let policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: empty], catalog: catalog)
-            XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
             XCTAssertFalse(policy.blocks(hostname: nil, outgoing: false))
         }
     }
@@ -121,7 +152,10 @@ final class BlockingConfigurationTests: XCTestCase {
                 BlockingConfiguration.legacyProviderRulesKey: old,
                 BlockingConfiguration.providerRulesKey: invalid
             ], catalog: Self.catalog)
-            XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+            XCTAssertFalse(policy.hasValidConfiguration)
+            XCTAssertFalse(policy.blocks(hostname: "blocked.test", outgoing: true))
+            XCTAssertTrue(policy.blocks(hostname: "youtube.com", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
         }
         let current = try legacy.providerData()
         policy = BlockingPolicy(vendorConfiguration: [
@@ -132,30 +166,32 @@ final class BlockingConfigurationTests: XCTestCase {
         policy = BlockingPolicy(vendorConfiguration: [
             BlockingConfiguration.legacyProviderRulesKey: Data(repeating: 0, count: 512 * 1024 + 1)
         ], catalog: Self.catalog)
-        XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
     }
 
-    func testProviderStartsClosedAndRetainsValidPolicyAfterRejectedReplacement() throws {
+    func testProviderStartsWithBaselineAndRetainsValidPolicyAfterRejectedReplacement() throws {
         var policy = BlockingPolicy()
-        XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
-        XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: nil, outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: nil, outgoing: false))
         var config = BlockingConfiguration()
         config.sites = [BlockingHostname("blocked.test")!]
         policy = try BlockingPolicy(data: config.providerData(), catalog: Self.catalog)
+        XCTAssertTrue(policy.hasValidConfiguration)
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
         XCTAssertTrue(policy.blocks(hostname: "blocked.test", outgoing: true))
         XCTAssertThrowsError(try { policy = try BlockingPolicy(data: Data("corrupt".utf8), catalog: Self.catalog) }())
+        XCTAssertTrue(policy.hasValidConfiguration)
         XCTAssertTrue(policy.blocks(hostname: "blocked.test", outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
     }
-    func testStrictProtectionBlocksUnidentifiableOutgoingDestinationsOnly() throws {
+    func testLegacyStrictFlagDoesNotBlockUnidentifiableDestinations() throws {
         var config = BlockingConfiguration()
         config.sites = [BlockingHostname("blocked.test")!]
         XCTAssertFalse(config.blocks(hostname: nil, outgoing: true))
         config.strictUnknownDestinations = true
         for host in [nil, "", "127.0.0.1", "::1", "example..com", "https://allowed.test"] as [String?] {
-            XCTAssertTrue(config.blocks(hostname: host, outgoing: true), "\(String(describing: host))")
+            XCTAssertFalse(config.blocks(hostname: host, outgoing: true), "\(String(describing: host))")
             XCTAssertFalse(config.blocks(hostname: host, outgoing: false))
         }
         XCTAssertTrue(config.blocks(hostname: "www.blocked.test.", outgoing: true))
@@ -266,7 +302,7 @@ final class BlockingConfigurationTests: XCTestCase {
         XCTAssertTrue(policy.blocks(hostname: "m.youtube.com", outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: "notyoutube.com", outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: "youtube.com.unlisted.test", outgoing: true))
-        XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: nil, outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: nil, outgoing: false))
         print("Pinned provider payload \(data.count) bytes for 246121 category domains and six explicit sites")
     }
@@ -305,7 +341,7 @@ final class BlockingConfigurationTests: XCTestCase {
         XCTAssertEqual(try BlockingConfiguration.decode(config.localData()), config)
     }
 
-    func testInvalidCommittedRulesReplaceAnOpenPolicyWithClosedPolicy() throws {
+    func testInvalidCommittedRulesFallBackWithoutBlockingUnrelatedTraffic() throws {
         let config = try fullConfiguration()
         let valid = try config.providerData()
         let missing = BlockingListCatalog { _ in throw BlockingTransportError.missingResource }
@@ -326,7 +362,9 @@ final class BlockingConfigurationTests: XCTestCase {
             var policy = try BlockingPolicy(data: valid, catalog: Self.catalog)
             XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
             policy = BlockingPolicy(committedProviderData: data, catalog: catalog)
-            XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+            XCTAssertFalse(policy.hasValidConfiguration)
+            XCTAssertTrue(policy.blocks(hostname: "youtube.com", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
             XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: false))
         }
     }
