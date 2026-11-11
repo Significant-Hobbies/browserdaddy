@@ -117,6 +117,8 @@ struct BlockingFilterState: Sendable {
             return disclosureNote
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return ""
+        } catch {
+            return disclosureNote
         }
     }
 }

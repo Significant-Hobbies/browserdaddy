@@ -263,8 +263,34 @@ final class BlockingControllerTests: XCTestCase {
         XCTAssertTrue(second.nativeRepairWarning.isEmpty)
         XCTAssertEqual(preferences.applyCount, 1)
         let marker = recoveryDisclosure(for: file)
-        if FileManager.default.fileExists(atPath: marker.path) {
-            XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: marker.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: marker.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    @MainActor
+    func testDamagedRecoveryDisclosureDoesNotBlockHealthyRulesOrAdditions() async throws {
+        for directory in [false, true] {
+            let file = try rulesFile()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            let initial = try CommittedBlockingRules(catalog: Self.catalog)
+            try initial.save(to: file)
+            let marker = recoveryDisclosure(for: file)
+            try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if directory { try FileManager.default.createDirectory(at: marker, withIntermediateDirectories: true) }
+            else { try Data("damaged notice".utf8).write(to: marker) }
+            let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: try initial.providerPayload().data))
+            let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+                extensionAvailable: true, extensionActivation: { $0() })
+            try await waitUntil { !controller.busy }
+            XCTAssertTrue(controller.ready)
+            XCTAssertTrue(controller.nativeRecoveryNote.contains("could not be recovered"))
+            XCTAssertTrue(controller.error.isEmpty)
+            guard controller.ready else { continue }
+            XCTAssertTrue(controller.addSite("added.test"))
+            try await waitUntil { !controller.busy && preferences.applyCount == 1 }
+            XCTAssertTrue(controller.configuration.sites.contains(BlockingHostname("added.test")!))
+            XCTAssertTrue(controller.configuration.sites.isSuperset(of: CommittedBlockingRules.protectedSites))
+            if !directory { XCTAssertEqual(try Data(contentsOf: marker), Data("damaged notice".utf8)) }
         }
     }
 
