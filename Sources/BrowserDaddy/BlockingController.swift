@@ -7,12 +7,28 @@ import SwiftUI
 struct BlockingFilterState: Sendable {
     let enabled: Bool
     let payload: Data?
+    var legacyPayload: Data? = nil
+    var currentRulesPresent = false
+    var legacyRulesPresent = false
+
+    nonisolated func decodedRules(catalog: BlockingListCatalog) throws -> BlockingConfiguration? {
+        if currentRulesPresent || payload != nil {
+            guard let payload else { throw CocoaError(.fileReadCorruptFile) }
+            return try BlockingConfiguration.decodeProvider(payload, catalog: catalog)
+        }
+        if legacyRulesPresent || legacyPayload != nil {
+            guard let legacyPayload else { throw CocoaError(.fileReadCorruptFile) }
+            guard legacyPayload.count <= 512 * 1024 else { throw BlockingTransportError.configurationTooLarge }
+            return try BlockingConfiguration.decode(legacyPayload)
+        }
+        return nil
+    }
 }
 
 @MainActor
 protocol BlockingPreferences {
     func load() async throws -> BlockingFilterState
-    func save(enabled: Bool, payload: Data?) async throws
+    func apply(_ payload: CommittedBlockingPayload) async throws
 }
 
 @MainActor
@@ -46,32 +62,32 @@ private final class SystemBlockingPreferences: BlockingPreferences {
             }
         }
         let ours = manager.providerConfiguration?.filterDataProviderBundleIdentifier == BlockingConfiguration.extensionID
+        let vendor = ours ? manager.providerConfiguration?.vendorConfiguration : nil
         return BlockingFilterState(enabled: ours && manager.isEnabled,
-                                   payload: ours ? manager.providerConfiguration?.vendorConfiguration?[BlockingConfiguration.providerRulesKey] as? Data : nil)
+            payload: vendor?[BlockingConfiguration.providerRulesKey] as? Data,
+            legacyPayload: vendor?[BlockingConfiguration.legacyProviderRulesKey] as? Data,
+            currentRulesPresent: vendor?.keys.contains(BlockingConfiguration.providerRulesKey) == true,
+            legacyRulesPresent: vendor?.keys.contains(BlockingConfiguration.legacyProviderRulesKey) == true)
     }
 
-    func save(enabled: Bool, payload: Data?) async throws {
-        try await queue.run { try await self.saveCurrent(enabled: enabled, payload: payload) }
+    func apply(_ payload: CommittedBlockingPayload) async throws {
+        try await queue.run { try await self.applyCurrent(payload) }
     }
 
-    private func saveCurrent(enabled: Bool, payload: Data?) async throws {
+    private func applyCurrent(_ payload: CommittedBlockingPayload) async throws {
         _ = try await loadCurrent()
         if let existing = manager.providerConfiguration,
            existing.filterDataProviderBundleIdentifier != BlockingConfiguration.extensionID {
             throw NSError(domain: "Blocking", code: 1, userInfo: [NSLocalizedDescriptionKey: "Another filter configuration is present. It was not changed."])
         }
-        if enabled {
-            guard let payload else { throw CocoaError(.fileReadCorruptFile) }
-            try BlockingConfiguration.validateProviderSize(payload)
-            let config = NEFilterProviderConfiguration()
-            config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload]
-            config.filterBrowsers = true
-            config.filterSockets = true
-            config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
-            manager.providerConfiguration = config
-        }
+        let config = NEFilterProviderConfiguration()
+        config.vendorConfiguration = [BlockingConfiguration.providerRulesKey: payload.data]
+        config.filterBrowsers = true
+        config.filterSockets = true
+        config.filterDataProviderBundleIdentifier = BlockingConfiguration.extensionID
+        manager.providerConfiguration = config
         manager.localizedDescription = "BrowserDaddy site blocking"
-        manager.isEnabled = enabled
+        manager.isEnabled = true
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             manager.saveToPreferences { error in
                 if let error { continuation.resume(throwing: error) }
@@ -90,9 +106,9 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     private var pendingApproval = false
     private var activationRequest: OSSystemExtensionRequest?
     private var activationVerified = false
-    private var enableAfterActivation = false
     private let extensionActivation: ((@escaping @MainActor () -> Void) -> Void)?
-    private var payload: Data?
+    private var committed: CommittedBlockingRules?
+    private var payload: CommittedBlockingPayload?
     @Published private(set) var configuration = BlockingConfiguration()
     @Published private(set) var status = "Checking filter…"
     @Published private(set) var enabled = false
@@ -123,31 +139,23 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         busy = true
         Task {
             do {
-                let (loaded, data, transportError) = try await Task.detached(priority: .userInitiated) { () throws -> (BlockingConfiguration, Data?, String?) in
+                let state = preview ? BlockingFilterState(enabled: false, payload: nil) : try await self.preferences.load()
+                enabled = state.enabled
+                let loaded = try await Task.detached(priority: .userInitiated) {
                     guard let url else { throw CocoaError(.fileNoSuchFile) }
-                    var loaded = BlockingConfiguration()
+                    var previous: [BlockingConfiguration] = []
                     if FileManager.default.fileExists(atPath: url.path) {
-                        loaded = try BlockingConfiguration.load(from: url)
-                    } else {
-                        loaded.categories = [.adult, .gambling]
-                        for category in BlockingCategory.allCases {
-                            let name = category == .adult ? "Adult" : "Gambling"
-                            guard let resource = Bundle.module.url(forResource: name, withExtension: "txt") else {
-                                throw CocoaError(.fileNoSuchFile)
-                            }
-                            loaded.lists[category] = try BlockingConfiguration.parseList(String(contentsOf: resource, encoding: .utf8))
-                        }
-                        _ = try loaded.providerData()
-                        try loaded.save(to: url)
+                        previous.append(try BlockingConfiguration.load(from: url))
                     }
-                    do { return (loaded, try loaded.providerData(), nil) }
-                    catch { return (loaded, nil, error.localizedDescription) }
+                    if let native = try state.decodedRules(catalog: Self.bundledListCatalog) { previous.append(native) }
+                    let rules = try CommittedBlockingRules(preserving: previous, catalog: Self.bundledListCatalog)
+                    let payload = try rules.providerPayload()
+                    try rules.save(to: url)
+                    return (rules, payload)
                 }.value
-                configuration = loaded
-                payload = data
-                if let transportError {
-                    error = "Saved rules loaded but cannot be applied: \(transportError) Disable a category or import a smaller custom list."
-                }
+                committed = loaded.0
+                payload = loaded.1
+                configuration = loaded.0.configuration
                 ready = true
                 busy = false
                 refresh()
@@ -185,20 +193,17 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 let state = try await preferences.load()
                 guard refreshGeneration == generation else { return }
                 enabled = state.enabled
-                if ruleDelivery == .pending && enabled && !busy { setEnabled(true); return }
+                if ruleDelivery == .pending && enabled && !busy { enable(); return }
                 guard self.enabled else {
                     ruleDelivery = .current
-                    self.status = "Filter off"
+                    self.status = "Filter disabled in macOS · enable protected rules"
                     return
                 }
                 guard self.ready else { self.status = "Filter configured · local rules unavailable"; return }
-                let applied = state.payload
-                let expected = self.configuration.activeConfiguration
-                let matches = await Task.detached {
-                    applied.flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: Self.bundledListCatalog) } == expected
-                }.value
+                guard let payload else { return }
+                let matches = payload.matches(state.payload)
                 guard self.refreshGeneration == generation else { return }
-                self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply saved rules"
+                self.status = matches ? "Filter configured · runtime unverified" : "Saved rules differ from filter · apply protected rules"
             } catch {
                 guard refreshGeneration == generation else { return }
                 let message = "Could not read filter preferences: \(error.localizedDescription)"
@@ -209,19 +214,29 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         }
     }
 
-    func save(_ value: BlockingConfiguration) {
-        guard ready, !busy, let rulesURL else { return }
+    func addSite(_ input: String) -> Bool {
+        guard ready, !busy, let committed, let rulesURL else { return false }
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let host = BlockingHostname(text) else {
+            error = "Enter a domain such as example.com, without a path or scheme."
+            return false
+        }
         refreshGeneration &+= 1
         busy = true
         Task {
             do {
-                let data = try await Task.detached(priority: .userInitiated) {
-                    let data = try value.providerData()
+                let state = preview ? BlockingFilterState(enabled: false, payload: nil) : try await preferences.load()
+                let value = try await Task.detached(priority: .userInitiated) {
+                    let previous = try state.decodedRules(catalog: Self.bundledListCatalog)
+                    let merged = try previous.map { try committed.preserving($0) } ?? committed
+                    let value = try merged.addingSite(host)
+                    let payload = try value.providerPayload()
                     try value.save(to: rulesURL)
-                    return data
+                    return (value, payload)
                 }.value
-                configuration = value
-                payload = data
+                self.committed = value.0
+                payload = value.1
+                configuration = value.0.configuration
                 ruleDelivery = .pending
                 error = ""
                 busy = false
@@ -232,54 +247,12 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 refresh()
             }
         }
-    }
-
-    func addSite(_ input: String) -> Bool {
-        guard ready, !busy else { return false }
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let host = BlockingHostname(text) else {
-            error = "Enter a domain such as example.com, without a path or scheme."
-            return false
-        }
-        var value = configuration
-        value.sites.insert(host)
-        save(value)
         return true
     }
 
-    func importList(_ category: BlockingCategory) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a UTF-8 domain list for \(category.title). One domain per line, or hosts-file format."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard ready, !busy else { return }
-        busy = true
-        Task {
-            do {
-                let hosts = try await Task.detached(priority: .userInitiated) {
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                    guard size <= 32 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-                    return try BlockingConfiguration.parseList(String(contentsOf: url, encoding: .utf8))
-                }.value
-                var value = configuration
-                value.lists[category] = hosts
-                busy = false
-                save(value)
-            } catch {
-                busy = false
-                self.error = "List was not imported. Use a nonempty domain or hosts list under 32 MB."
-                refresh()
-            }
-        }
-    }
-
-    func activate() {
+    private func activate() {
         guard !preview, ready, extensionBundled, !pendingApproval, !busy else { return }
         activationVerified = false
-        enableAfterActivation = true
         busy = true
         status = "Waiting for macOS approval…"
         if let extensionActivation {
@@ -292,22 +265,25 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         OSSystemExtensionManager.shared.submitRequest(request)
     }
 
-    func setEnabled(_ value: Bool) {
-        guard !preview, !busy, !(value && pendingApproval) else { return }
-        guard !value || (ready && payload != nil) else {
-            if error.isEmpty { error = "Load valid local rules before enabling the filter." }
-            return
-        }
-        enableAfterActivation = value
-        if value && !activationVerified {
-            activate()
-            return
-        }
+    func enable() {
+        guard !preview, !busy, !pendingApproval, ready, let committed, let rulesURL else { return }
+        if !activationVerified { activate(); return }
         refreshGeneration &+= 1
         busy = true
         Task {
             do {
-                try await preferences.save(enabled: value, payload: value ? payload : nil)
+                let state = try await preferences.load()
+                let value = try await Task.detached(priority: .userInitiated) {
+                    let previous = try state.decodedRules(catalog: Self.bundledListCatalog)
+                    let value = try previous.map { try committed.preserving($0) } ?? committed
+                    let payload = try value.providerPayload()
+                    try value.save(to: rulesURL)
+                    return (value, payload)
+                }.value
+                self.committed = value.0
+                payload = value.1
+                configuration = value.0.configuration
+                try await preferences.apply(value.1)
                 ruleDelivery = .current
                 finish(nil)
             } catch {
@@ -320,8 +296,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     private func finishActivation() {
         activationVerified = true
         busy = false
-        if enableAfterActivation { setEnabled(true) }
-        else { refresh() }
+        enable()
     }
 
     private func finish(_ failure: Error?) {
@@ -345,7 +320,6 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             self.pendingApproval = false
             self.activationVerified = false
             self.ruleDelivery = .failed
-            self.enableAfterActivation = false
             self.finish(error)
         }
     }
@@ -358,7 +332,6 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             else {
                 self.activationVerified = false
                 self.ruleDelivery = .failed
-                self.enableAfterActivation = false
                 self.status = "Restart your Mac to finish installing the filter"
             }
         }
