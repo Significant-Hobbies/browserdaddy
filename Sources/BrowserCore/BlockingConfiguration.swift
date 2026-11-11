@@ -118,11 +118,10 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     /// a bundled reference. The provider must continue to use decodeProvider's strict hashes.
     public static func recoverProviderAdditions(_ data: Data) throws -> (configuration: Self, incomplete: Bool) {
         try validateProviderSize(data)
-        try requireLegacyRecovery(data)
         let value = try JSONDecoder().decode(BlockingProviderRecoveryConfiguration.self, from: data)
-        guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
         var result = Self()
         result.sites = value.sites
+        result.scheduledSites = value.scheduledSites
         var incomplete = value.incomplete
         for category in value.categories {
             guard let source = value.sources[category]?.value else { incomplete = true; continue }
@@ -137,14 +136,9 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         return (result, incomplete)
     }
 
-    public static func requireLegacyRecovery(_ data: Data) throws {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["version"] as? Int == 2 else { throw BlockingTransportError.unsupportedVersion }
-        if object.keys.contains("scheduledSites") {
-            guard let schedules = object["scheduledSites"] as? [Any], schedules.isEmpty else {
-                throw CocoaError(.fileReadCorruptFile)
-            }
-        }
+    public static func requireRecoveryValidation(_ data: Data) throws {
+        try validateProviderSize(data)
+        _ = try JSONDecoder().decode(BlockingProviderRecoveryConfiguration.self, from: data)
     }
 
     public func localData() throws -> Data {
@@ -427,12 +421,22 @@ private struct BlockingProviderRecoveryConfiguration: Decodable {
     let categories: Set<BlockingCategory>
     let sources: [BlockingCategory: RecoverableBlockingListSource]
     let incomplete: Bool
+    let scheduledSites: Set<ScheduledSiteBlock>
 
-    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources }
+    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources, scheduledSites }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         version = try values.decode(Int.self, forKey: .version)
+        guard version == 2 || version == 3 else { throw BlockingTransportError.unsupportedVersion }
+        // Schedule recovery is all-or-nothing: never silently discard a commitment.
+        let schedules = values.contains(.scheduledSites)
+            ? try values.decode([ScheduledSiteBlock].self, forKey: .scheduledSites) : []
+        guard schedules.count <= ScheduledSiteBlock.maximumCount,
+              (version == 2 && schedules.isEmpty) || (version == 3 && !schedules.isEmpty) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        scheduledSites = Set(schedules)
         let sites = try? values.decode(RecoverableBlockingValues<BlockingHostname>.self, forKey: .sites)
         let categories = try? values.decode(RecoverableBlockingValues<BlockingCategory>.self, forKey: .categories)
         self.sites = sites?.values ?? []

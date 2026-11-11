@@ -56,6 +56,92 @@ final class BlockingControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testStaleV3RecoveryPreservesAllSchedulesAndExtrasWithVerifiedFloor() async throws {
+        for enabled in [false, true] {
+            let file = try rulesFile()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            let localSchedule = ScheduledSiteBlock(hostname: BlockingHostname("local.test")!, weekdays: [2], startMinute: 60, endMinute: 120)!
+            let xSchedule = ScheduledSiteBlock(hostname: BlockingHostname("x.com")!, weekdays: Set(1...7), startMinute: 600, endMinute: 0)!
+            let twitterSchedule = ScheduledSiteBlock(hostname: BlockingHostname("twitter.com")!, weekdays: Set(1...7), startMinute: 600, endMinute: 0)!
+            var local = BlockingConfiguration()
+            local.sites = [BlockingHostname("local-extra.test")!]
+            local.scheduledSites = [localSchedule]
+            try local.save(to: file)
+            var native = try CommittedBlockingRules(catalog: Self.catalog).configuration
+            native.scheduledSites = [xSchedule, twitterSchedule]
+            native.sites = [BlockingHostname("native-extra.test")!]
+            native.lists[.gambling] = [BlockingHostname("inline-extra.test")!]
+            let raw = Data(String(decoding: try native.providerData(), as: UTF8.self)
+                .replacingOccurrences(of: "4eb9d0d020d546521c4d90485d7c423f6fbb1336e880d003fd08dcce5c7675d3", with: String(repeating: "0", count: 64)).utf8)
+            XCTAssertThrowsError(try BlockingConfiguration.decodeProvider(raw, catalog: Self.catalog))
+            let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: enabled, payload: raw))
+            let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+                extensionAvailable: true, extensionActivation: { $0() })
+            try await waitUntil { !controller.busy && (enabled ? controller.status.contains("runtime unverified") : controller.ready) }
+            XCTAssertTrue(controller.ready)
+            XCTAssertEqual(controller.configuration.scheduledSites, [localSchedule, xSchedule, twitterSchedule])
+            for host in ["local-extra.test", "native-extra.test", "inline-extra.test", "youtube.com"] {
+                XCTAssertTrue(controller.configuration.sites.contains(BlockingHostname(host)!))
+            }
+            XCTAssertEqual(controller.configuration.categories, Set(BlockingCategory.allCases))
+            XCTAssertTrue(controller.configuration.strictUnknownDestinations)
+            XCTAssertEqual(try BlockingConfiguration.load(from: file), controller.configuration)
+            XCTAssertEqual(preferences.applyCount, enabled ? 1 : 0)
+            if !enabled { controller.enable() }
+            try await waitUntil { preferences.applyCount == 1 && !controller.busy }
+            let applied = try BlockingConfiguration.decodeProvider(XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
+            XCTAssertEqual(applied, controller.configuration)
+            for _ in 0..<3 { controller.refresh(); await Task.yield() }
+            try await waitUntil { !controller.busy }
+            XCTAssertEqual(preferences.applyCount, 1)
+        }
+    }
+
+    func testV3RecoveryKeepsValidSchedulesBesideIncompleteOrdinarySites() throws {
+        let schedule = ScheduledSiteBlock(hostname: BlockingHostname("x.com")!, weekdays: Set(1...7), startMinute: 600, endMinute: 0)!
+        var native = BlockingConfiguration()
+        native.scheduledSites = [schedule]
+        native.sites = [BlockingHostname("valid-extra.test")!]
+        native.categories = [.gambling]
+        native.lists[.gambling] = [BlockingHostname("inline-extra.test")!]
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: native.providerData()) as? [String: Any])
+        object["sites"] = [["value": "valid-extra.test"], ["value": "https://invalid.test"]]
+        let recovered = try BlockingConfiguration.recoverProviderAdditions(JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(recovered.incomplete)
+        XCTAssertEqual(recovered.configuration.scheduledSites, [schedule])
+        XCTAssertEqual(recovered.configuration.sites, [BlockingHostname("valid-extra.test")!])
+        XCTAssertEqual(recovered.configuration.lists[.gambling], [BlockingHostname("inline-extra.test")!])
+    }
+
+    @MainActor
+    func testV3RecoveryNeverLosesMalformedOrMissingSchedules() async throws {
+        let schedule = ScheduledSiteBlock(hostname: BlockingHostname("x.com")!, weekdays: Set(1...7), startMinute: 600, endMinute: 0)!
+        let encodedSchedule = try JSONSerialization.jsonObject(with: JSONEncoder().encode(schedule))
+        let malformed: [Any?] = [nil, NSNull(), [], ["unknown": true], [["broken": true]], [encodedSchedule, ["broken": true]], Array(repeating: encodedSchedule, count: 129)]
+        for schedules in malformed {
+            let file = try rulesFile()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            try BlockingConfiguration().save(to: file)
+            let original = try Data(contentsOf: file)
+            var object: [String: Any] = ["version": 3, "sites": [], "categories": ["adult"],
+                "sources": ["adult", ["bundled": ["sha256": String(repeating: "0", count: 64)]]], "strictUnknownDestinations": true]
+            if let schedules { object["scheduledSites"] = schedules }
+            let raw = try JSONSerialization.data(withJSONObject: object)
+            let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: raw))
+            let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+                extensionAvailable: true, extensionActivation: { $0() })
+            try await waitUntil { !controller.busy }
+            XCTAssertFalse(controller.ready)
+            XCTAssertEqual(try Data(contentsOf: file), original)
+            XCTAssertEqual(preferences.state.payload, raw)
+            XCTAssertEqual(preferences.applyCount, 0)
+            XCTAssertTrue(controller.loadError.contains("may block all outgoing traffic"))
+            controller.enable()
+            XCTAssertEqual(preferences.applyCount, 0)
+        }
+    }
+
+    @MainActor
     func testCorruptScheduledNativeRulesNeverRepairOrReplaceEitherStore() async throws {
         let file = try rulesFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
