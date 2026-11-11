@@ -95,6 +95,9 @@ private enum BrowserDaddyRuntime {
 
     static func start() {
         guard !BrowserStartupCheck.enabled else { return }
+        if !CommandLine.arguments.contains("--preview-fixture"), Bundle.main.bundleIdentifier?.hasSuffix(".preview") != true {
+            _ = BlockingController.shared
+        }
         if let model = startup.model { updates.start(model: model) }
         LinkRouterService.shared.install()
     }

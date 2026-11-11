@@ -106,6 +106,28 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         return result
     }
 
+    /// Host maintenance only: recover explicit and active inline additions without trusting
+    /// a bundled reference. The provider must continue to use decodeProvider's strict hashes.
+    public static func recoverProviderAdditions(_ data: Data) throws -> (configuration: Self, incomplete: Bool) {
+        try validateProviderSize(data)
+        let value = try JSONDecoder().decode(BlockingProviderRecoveryConfiguration.self, from: data)
+        guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
+        var result = Self()
+        result.sites = value.sites
+        var incomplete = value.incomplete
+        for category in value.categories {
+            guard let source = value.sources[category]?.value else { incomplete = true; continue }
+            switch source {
+            case .bundled: break
+            case .inline(let hosts):
+                guard !hosts.isEmpty else { incomplete = true; continue }
+                result.categories.insert(category)
+                result.lists[category] = hosts
+            }
+        }
+        return (result, incomplete)
+    }
+
     public func localData() throws -> Data {
         try validate()
         let data = try JSONEncoder().encode(self)
@@ -148,26 +170,113 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     }
 }
 
+/// Only this value can produce an app-applied policy. Legacy DTOs remain decodable.
+public struct CommittedBlockingRules: Sendable, Equatable {
+    public static let protectedSites = Set(["youtube.com", "youtu.be", "youtube-nocookie.com", "reddit.com", "redd.it", "instagram.com"].map { BlockingHostname($0)! })
+    public let configuration: BlockingConfiguration
+
+    public init(preserving configurations: [BlockingConfiguration] = [], catalog: BlockingListCatalog = .main) throws {
+        var result = BlockingConfiguration()
+        result.categories = Set(BlockingCategory.allCases)
+        result.strictUnknownDestinations = true
+        result.sites = Self.protectedSites
+        for category in BlockingCategory.allCases {
+            result.lists[category] = try catalog.resolve(category, sha256: BlockingListCatalog.rawDigests[category]!)
+        }
+        for previous in configurations {
+            result.sites.formUnion(previous.sites)
+            for category in previous.categories {
+                result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
+            }
+        }
+        configuration = result
+    }
+
+    private init(configuration: BlockingConfiguration) { self.configuration = configuration }
+
+    public func addingSite(_ site: BlockingHostname) throws -> Self {
+        var result = configuration
+        result.sites.insert(site)
+        let value = Self(configuration: result)
+        _ = try value.providerPayload()
+        return value
+    }
+
+    public func preserving(_ previous: BlockingConfiguration) throws -> Self {
+        var result = configuration
+        result.sites.formUnion(previous.sites)
+        for category in previous.categories {
+            result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
+        }
+        let value = Self(configuration: result)
+        _ = try value.providerPayload()
+        return value
+    }
+
+    public func providerPayload() throws -> CommittedBlockingPayload {
+        let value = BlockingProviderConfiguration(version: 2, sites: configuration.sites,
+            categories: configuration.categories,
+            sources: Dictionary(uniqueKeysWithValues: BlockingCategory.allCases.map {
+                ($0, .bundled(sha256: BlockingListCatalog.rawDigests[$0]!))
+            }), strictUnknownDestinations: true)
+        return try CommittedBlockingPayload(data: JSONEncoder().encode(value))
+    }
+
+    public func save(to url: URL) throws {
+        _ = try providerPayload()
+        let existing = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+        if let existing, try BlockingConfiguration.decode(existing) == configuration { return }
+        let data = try configuration.localData()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let existing {
+            let recovery = url.appendingPathExtension("pre-commitment")
+            if !FileManager.default.fileExists(atPath: recovery.path) {
+                let temporary = url.appendingPathExtension("recovery-" + UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                try existing.write(to: temporary, options: .atomic)
+                // An exclusive hard link publishes complete bytes without replacing a prior backup.
+                try FileManager.default.linkItem(at: temporary, to: recovery)
+            }
+        }
+        try data.write(to: url, options: .atomic)
+    }
+}
+
+public struct CommittedBlockingPayload: Sendable {
+    public let data: Data
+    fileprivate init(data: Data) throws {
+        try BlockingConfiguration.validateProviderSize(data)
+        self.data = data
+    }
+
+    public func matches(_ applied: Data?) -> Bool {
+        guard let applied,
+              let actual = try? JSONDecoder().decode(BlockingProviderConfiguration.self, from: applied),
+              let expected = try? JSONDecoder().decode(BlockingProviderConfiguration.self, from: data) else { return false }
+        return actual == expected
+    }
+}
+
 /// The provider starts closed and swaps only fully validated snapshots.
 public struct BlockingPolicy: Sendable {
     private let configuration: BlockingConfiguration?
 
     public init() { configuration = nil }
     public init(data: Data, catalog: BlockingListCatalog = .main) throws {
-        configuration = try BlockingConfiguration.decodeProvider(data, catalog: catalog)
+        configuration = try CommittedBlockingRules(preserving: [BlockingConfiguration.decodeProvider(data, catalog: catalog)], catalog: catalog).configuration
     }
 
     public init(committedProviderData: Data?, catalog: BlockingListCatalog = .main) {
-        configuration = committedProviderData.flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+        configuration = committedProviderData.flatMap { try? CommittedBlockingRules(preserving: [BlockingConfiguration.decodeProvider($0, catalog: catalog)], catalog: catalog).configuration }
     }
 
     public init(vendorConfiguration: [String: Any]?, catalog: BlockingListCatalog = .main) {
         if let vendorConfiguration, vendorConfiguration.keys.contains(BlockingConfiguration.providerRulesKey) {
             configuration = (vendorConfiguration[BlockingConfiguration.providerRulesKey] as? Data)
-                .flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+                .flatMap { try? CommittedBlockingRules(preserving: [BlockingConfiguration.decodeProvider($0, catalog: catalog)], catalog: catalog).configuration }
         } else if let data = vendorConfiguration?[BlockingConfiguration.legacyProviderRulesKey] as? Data,
                   data.count <= 512 * 1024 {
-            configuration = try? BlockingConfiguration.decode(data).activeConfiguration
+            configuration = try? CommittedBlockingRules(preserving: [BlockingConfiguration.decode(data)], catalog: catalog).configuration
         } else {
             configuration = nil
         }
@@ -178,12 +287,12 @@ public struct BlockingPolicy: Sendable {
     }
 }
 
-private enum BlockingListSource: Codable {
+private enum BlockingListSource: Codable, Equatable {
     case bundled(sha256: String)
     case inline(Set<BlockingHostname>)
 }
 
-private struct BlockingProviderConfiguration: Codable {
+private struct BlockingProviderConfiguration: Codable, Equatable {
     let version: Int
     let sites: Set<BlockingHostname>
     let categories: Set<BlockingCategory>
@@ -191,12 +300,88 @@ private struct BlockingProviderConfiguration: Codable {
     let strictUnknownDestinations: Bool
 }
 
+private struct RecoverableBlockingValue<Value: Decodable>: Decodable {
+    let value: Value?
+    init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
+}
+
+private struct RecoverableBlockingValues<Value: Decodable & Hashable>: Decodable {
+    let values: Set<Value>
+    let incomplete: Bool
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var values: Set<Value> = []
+        var incomplete = false
+        while !container.isAtEnd {
+            let item = try container.decode(RecoverableBlockingValue<Value>.self)
+            if let value = item.value { values.insert(value) }
+            else { incomplete = true }
+        }
+        self.values = values
+        self.incomplete = incomplete
+    }
+}
+
+private struct RecoverableBlockingListSource: Decodable {
+    let value: BlockingListSource?
+    let incomplete: Bool
+    private enum CodingKeys: String, CodingKey { case inline }
+    private enum InlineKeys: String, CodingKey { case hosts = "_0" }
+
+    init(from decoder: Decoder) throws {
+        if let source = try? BlockingListSource(from: decoder) {
+            value = source
+            incomplete = false
+        } else {
+            let container = try? decoder.container(keyedBy: CodingKeys.self)
+            let inline = try? container?.nestedContainer(keyedBy: InlineKeys.self, forKey: .inline)
+            let hosts = try? inline?.decode(RecoverableBlockingValues<BlockingHostname>.self, forKey: .hosts)
+            value = hosts.map { .inline($0.values) }
+            incomplete = true
+        }
+    }
+}
+
+private struct BlockingProviderRecoveryConfiguration: Decodable {
+    let version: Int
+    let sites: Set<BlockingHostname>
+    let categories: Set<BlockingCategory>
+    let sources: [BlockingCategory: RecoverableBlockingListSource]
+    let incomplete: Bool
+
+    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        let sites = try? values.decode(RecoverableBlockingValues<BlockingHostname>.self, forKey: .sites)
+        let categories = try? values.decode(RecoverableBlockingValues<BlockingCategory>.self, forKey: .categories)
+        self.sites = sites?.values ?? []
+        self.categories = categories?.values ?? []
+        var incomplete = sites == nil || categories == nil || sites?.incomplete == true || categories?.incomplete == true
+        var sources: [BlockingCategory: RecoverableBlockingListSource] = [:]
+        if var pairs = try? values.nestedUnkeyedContainer(forKey: .sources) {
+            while !pairs.isAtEnd {
+                let category = try pairs.decode(RecoverableBlockingValue<BlockingCategory>.self).value
+                guard !pairs.isAtEnd else { incomplete = true; break }
+                let source = try pairs.decode(RecoverableBlockingListSource.self)
+                if let category, sources[category] == nil { sources[category] = source }
+                else { incomplete = true }
+                if source.incomplete { incomplete = true }
+            }
+        } else { incomplete = true }
+        self.sources = sources
+        self.incomplete = incomplete
+    }
+}
+
 public enum BlockingTransportError: LocalizedError {
     case configurationTooLarge, unsupportedVersion, unsupportedReference, missingResource, corruptResource, invalidList
 
     public var errorDescription: String? {
         switch self {
-        case .configurationTooLarge: return "These rules exceed the macOS filter limit. Use smaller custom lists or the bundled categories."
+        case .configurationTooLarge: return "The protected rules exceed the macOS filter limit. Existing saved rules have been preserved; assisted maintenance is required."
         case .unsupportedVersion: return "Unsupported filter rules version."
         case .unsupportedReference: return "Unsupported bundled category reference."
         case .missingResource: return "A bundled category list is missing."
