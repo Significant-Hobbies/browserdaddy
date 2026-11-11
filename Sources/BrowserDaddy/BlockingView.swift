@@ -3,8 +3,14 @@ import BrowserCore
 import SwiftUI
 
 struct BlockingView: View {
-    @StateObject private var controller = BlockingController.shared
+    @StateObject private var controller: BlockingController
+    @StateObject private var protectionCheck: ProtectionCheckModel
     @State private var site = ""
+
+    init(controller: BlockingController = .shared, protectionCheck: ProtectionCheckModel = ProtectionCheckModel()) {
+        _controller = StateObject(wrappedValue: controller)
+        _protectionCheck = StateObject(wrappedValue: protectionCheck)
+    }
 
     var body: some View {
         ScrollView {
@@ -39,6 +45,7 @@ struct BlockingView: View {
                         }
                     }
                 }
+                protectionCheckBand
                 BrowserBand(label: "CATEGORIES", subtitle: "Block known domains using offline lists") {
                     VStack(alignment: .leading, spacing: 14) {
                         ForEach(BlockingCategory.allCases, id: \.self) { category in
@@ -95,6 +102,13 @@ struct BlockingView: View {
             .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.fog)
+        .onAppear { protectionCheck.startObservingNetwork() }
+        .onDisappear { protectionCheck.stopObservingNetwork() }
+        .onChange(of: controller.configuration) { _, _ in protectionCheck.invalidate() }
+        .onChange(of: controller.enabled) { _, _ in protectionCheck.invalidate() }
+        .onChange(of: controller.ready) { _, _ in protectionCheck.invalidate() }
+        .onChange(of: controller.busy) { _, _ in protectionCheck.invalidate() }
+        .onChange(of: controller.status) { _, _ in protectionCheck.invalidate() }
         .onChange(of: controller.configuration.sites) { _, sites in
             if let host = BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)), sites.contains(host) {
                 site = ""
@@ -102,6 +116,72 @@ struct BlockingView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             controller.refresh()
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            protectionCheck.invalidate()
+        }
+    }
+
+    private var protectionCheckBand: some View {
+        BrowserBand(label: "CHECK PROTECTION", subtitle: "Four samples from this app's network path") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Only when you click Check protection, BrowserDaddy sends one HTTPS HEAD request to each destination below. These hosts receive your IP address and standard connection metadata. No browsing history is read or sent; responses are not saved.")
+                    .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                ForEach(ProtectionCheckTarget.allCases) { target in
+                    HStack {
+                        Text(target.rawValue).font(.callout.monospaced())
+                        Text(target.isProtected ? "Protected sample" : "Allowed control")
+                            .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                        Spacer()
+                        Text(protectionCheck.observations[target]?.label ?? (protectionCheck.isRunning ? "Checking…" : "—"))
+                            .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                    }
+                }
+                if controller.configuration.blocks(hostname: ProtectionCheckTarget.allowed.rawValue, outgoing: true) {
+                    Text("Your rules block example.com. The allowed control will be inconclusive.")
+                        .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                }
+                HStack {
+                    Button("Check protection") {
+                        protectionCheck.start(configuration: controller.configuration, eligible: canCheckProtection)
+                    }.disabled(!canCheckProtection || protectionCheck.isRunning)
+                    if protectionCheck.isRunning {
+                        ProgressView().controlSize(.small)
+                        Button("Cancel") { protectionCheck.cancel() }
+                    }
+                }
+                protectionCheckResult
+                Text("A failed request never proves blocking. This checks BrowserDaddy only, not Chrome, private windows, other apps or all content. Results can change as rules, connections and networks change.")
+                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+            }
+        }
+    }
+
+    private var canCheckProtection: Bool {
+        controller.ready && !controller.busy && controller.enabled && controller.extensionBundled
+    }
+
+    @ViewBuilder private var protectionCheckResult: some View {
+        switch protectionCheck.state {
+        case .idle:
+            if !canCheckProtection {
+                Text("Enable the bundled protected filter before checking.")
+                    .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+            }
+        case .running:
+            Text("Checking four destinations · up to 8 seconds")
+                .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+        case .finished(let report):
+            Text(report.summary).font(.callout)
+                .foregroundStyle(report.assessment == .protectedReachable ? BrowserTheme.coral : BrowserTheme.secondaryInk)
+            Text("Checked \(report.checkedAt.formatted(date: .abbreviated, time: .standard))")
+                .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+        case .cancelled:
+            Text("Check cancelled. No conclusion was recorded.")
+                .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+        case .stale:
+            Text("The previous check is stale. Run a new check for current observations.")
+                .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
         }
     }
 
