@@ -74,7 +74,6 @@ protocol ProtectionProbing: Sendable {
 }
 
 struct HTTPSProtectionProbe: ProtectionProbing {
-    // Only tests replace the protocol stack. Production always uses an ephemeral session.
     let protocolClasses: [AnyClass]?
     init(protocolClasses: [AnyClass]? = nil) { self.protocolClasses = protocolClasses }
 
@@ -143,7 +142,7 @@ private final class HeaderProbe: NSObject, URLSessionDataDelegate, @unchecked Se
         let session = session
         self.session = nil
         lock.unlock()
-        // Cancelling after headers prevents a server that ignores HEAD from streaming a body.
+        // Cancel after headers to avoid consuming a body from servers that ignore HEAD.
         session?.invalidateAndCancel()
         continuation?.resume(returning: observation)
     }

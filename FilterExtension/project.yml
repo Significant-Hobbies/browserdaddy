@@ -14,6 +14,7 @@ targets:
     sources:
       - path: FilterDataProvider.swift
       - path: main.swift
+      - path: ../Sources/BrowserCore/ScheduledSiteBlock.swift
       - path: ../Sources/BrowserCore/SiteBlocking.swift
       - path: ../Sources/BrowserCore/BlockingConfiguration.swift
       - path: ../Sources/BrowserDaddy/Resources/BlockingLists/Adult.txt

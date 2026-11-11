@@ -35,6 +35,10 @@ struct BlockingFilterState: Sendable {
         }
         do { return (try decodedRules(catalog: catalog), "", false) }
         catch {
+            if currentRulesPresent || payload != nil {
+                guard let payload else { throw error }
+                try BlockingConfiguration.requireLegacyRecovery(payload)
+            } else if legacyRulesPresent || legacyPayload != nil { throw error }
             // A present v2 always takes precedence, including malformed v2. Never read v1 here.
             if let payload, let additions = try? BlockingConfiguration.recoverProviderAdditions(payload) {
                 if additions.incomplete {
@@ -329,12 +333,21 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func addSite(_ input: String) -> Bool {
-        guard ready, !busy, let committed, let rulesURL else { return false }
+        guard ready, !busy else { return false }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let host = BlockingHostname(text) else {
             error = "Enter a domain such as example.com, without a path or scheme."
             return false
         }
+        return addRule { try $0.addingSite(host) }
+    }
+
+    func addScheduledSite(_ schedule: ScheduledSiteBlock) -> Bool {
+        addRule { try $0.addingScheduledSite(schedule) }
+    }
+
+    private func addRule(_ addition: @escaping @Sendable (CommittedBlockingRules) throws -> CommittedBlockingRules) -> Bool {
+        guard ready, !busy, let committed, let rulesURL else { return false }
         refreshGeneration &+= 1
         busy = true
         Task {
@@ -343,7 +356,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 let value = try await Task.detached(priority: .userInitiated) {
                     let (previous, warning, incomplete) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     let merged = try previous.map { try committed.preserving($0) } ?? committed
-                    let value = try merged.addingSite(host)
+                    let value = try addition(merged)
                     let payload = try value.providerPayload()
                     if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL, incomplete: incomplete) }
                     let note = try BlockingFilterState.incompleteRecoveryNote(beside: rulesURL)
