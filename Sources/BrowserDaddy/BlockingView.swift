@@ -34,6 +34,9 @@ struct BlockingView: View {
                         if !controller.nativeRepairWarning.isEmpty && controller.nativeRepairWarning != controller.error {
                             Text(controller.nativeRepairWarning).font(.callout).foregroundStyle(BrowserTheme.coral)
                         }
+                        if !controller.nativeRecoveryNote.isEmpty {
+                            Text(controller.nativeRecoveryNote).font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                        }
                     }
                 }
                 BrowserBand(label: "CATEGORIES", subtitle: "Block known domains using offline lists") {

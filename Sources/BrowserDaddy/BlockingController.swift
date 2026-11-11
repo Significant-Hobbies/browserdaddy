@@ -37,7 +37,10 @@ struct BlockingFilterState: Sendable {
         catch {
             // A present v2 always takes precedence, including malformed v2. Never read v1 here.
             if let payload, let additions = try? BlockingConfiguration.recoverProviderAdditions(payload) {
-                return (additions, "Native filter rules required recovery. A raw settings copy was preserved; explicit websites and active inline additions were recovered. The prepared rules use the verified bundled lists.")
+                if additions.incomplete {
+                    return (additions.configuration, "Native filter rules required recovery. A raw settings copy was preserved; valid explicit websites and active inline additions were recovered, but some native-only additions could not be recovered. The prepared rules use the verified bundled lists; assisted maintenance can inspect the recovery copy.")
+                }
+                return (additions.configuration, "Native filter rules required recovery. A raw settings copy was preserved; explicit websites and active inline additions were recovered. The prepared rules use the verified bundled lists.")
             }
             return (nil, "Native filter rules required recovery. A raw settings copy was preserved, but unknown native-only additions could not be recovered. The prepared rules use the verified baseline and known local rules; assisted maintenance can inspect the recovery copy.")
         }
@@ -56,6 +59,17 @@ struct BlockingFilterState: Sendable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        let candidate = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? NSDictionary
+        for existing in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            where existing.pathExtension == "plist" {
+            let saved = try Data(contentsOf: existing)
+            let archived = (try? PropertyListSerialization.propertyList(from: saved, format: nil)) as? NSDictionary
+            // Archive key ordering can change between reads; embedded native Data must match exactly.
+            if saved == data || (candidate != nil && archived?.isEqual(candidate) == true) {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: existing.path)
+                return
+            }
+        }
         let name = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let recovery = directory.appendingPathComponent(name + ".plist")
         if FileManager.default.fileExists(atPath: recovery.path) {
@@ -164,6 +178,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     @Published var error = ""
     @Published private(set) var loadError = ""
     @Published private(set) var nativeRepairWarning = ""
+    @Published private(set) var nativeRecoveryNote = ""
     private var refreshGeneration: UInt64 = 0
     private let preview: Bool
     private var rulesURL: URL?
@@ -215,6 +230,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 nativeRepairWarning = loaded.2
                 error = loaded.2
                 loadError = ""
+                if !loaded.2.isEmpty && state.enabled && extensionBundled && !preview { ruleDelivery = .pending }
                 ready = true
                 busy = false
                 refresh()
@@ -347,6 +363,9 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 configuration = value.0.configuration
                 if !value.2.isEmpty { nativeRepairWarning = value.2 }
                 try await preferences.apply(value.1)
+                if !nativeRepairWarning.isEmpty { nativeRecoveryNote = "Protected rules were applied. " + nativeRepairWarning }
+                nativeRepairWarning = ""
+                error = ""
                 ruleDelivery = .current
                 finish(nil)
             } catch {

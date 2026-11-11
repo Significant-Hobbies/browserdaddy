@@ -179,15 +179,16 @@ final class BlockingControllerTests: XCTestCase {
     func testBadPresentNativeRulesArePreservedBeforeProtectedRepairWithoutLegacyFallback() async throws {
         var legacy = BlockingConfiguration()
         legacy.sites = [BlockingHostname("stale-legacy.test")!]
+        let legacyData = try legacy.localData()
         let wrongTypeArchive = try PropertyListSerialization.data(fromPropertyList: [
             BlockingConfiguration.providerRulesKey: 17,
-            BlockingConfiguration.legacyProviderRulesKey: try legacy.localData()
+            BlockingConfiguration.legacyProviderRulesKey: legacyData
         ], format: .binary, options: 0)
         for state in [
-            BlockingFilterState(enabled: true, payload: Data("bad".utf8), legacyPayload: try legacy.localData()),
-            BlockingFilterState(enabled: true, payload: nil, legacyPayload: try legacy.localData(), currentRulesPresent: true),
-            BlockingFilterState(enabled: true, payload: nil, legacyRulesPresent: true),
-            BlockingFilterState(enabled: true, payload: nil, legacyPayload: try legacy.localData(), currentRulesPresent: true,
+            BlockingFilterState(enabled: false, payload: Data("bad".utf8), legacyPayload: legacyData),
+            BlockingFilterState(enabled: false, payload: nil, legacyPayload: legacyData, currentRulesPresent: true),
+            BlockingFilterState(enabled: false, payload: nil, legacyRulesPresent: true),
+            BlockingFilterState(enabled: false, payload: nil, legacyPayload: legacyData, currentRulesPresent: true,
                 nativeConfigurationData: wrongTypeArchive)
         ] {
             let file = try rulesFile()
@@ -217,7 +218,7 @@ final class BlockingControllerTests: XCTestCase {
             XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: archive.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
             preferences.beforeApply = { XCTAssertTrue(FileManager.default.fileExists(atPath: archive.path)) }
             let closed = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: state.payload as Any,
-                BlockingConfiguration.legacyProviderRulesKey: try legacy.localData()], catalog: Self.catalog)
+                BlockingConfiguration.legacyProviderRulesKey: legacyData], catalog: Self.catalog)
             XCTAssertTrue(closed.blocks(hostname: "unlisted.test", outgoing: true))
             controller.enable()
             try await waitUntil { preferences.applyCount == 1 && !controller.busy }
@@ -227,6 +228,9 @@ final class BlockingControllerTests: XCTestCase {
             XCTAssertTrue(repaired.blocks(hostname: "youtube.com", outgoing: true))
             XCTAssertTrue(repaired.blocks(hostname: nil, outgoing: true))
             XCTAssertEqual(try Data(contentsOf: file.appendingPathExtension("pre-commitment")), original)
+            XCTAssertTrue(controller.nativeRepairWarning.isEmpty)
+            XCTAssertTrue(controller.error.isEmpty)
+            XCTAssertTrue(controller.nativeRecoveryNote.contains("could not be recovered"))
         }
     }
 
@@ -246,7 +250,7 @@ final class BlockingControllerTests: XCTestCase {
         XCTAssertThrowsError(try BlockingConfiguration.decodeProvider(raw, catalog: Self.catalog))
         let closed = BlockingPolicy(committedProviderData: raw, catalog: Self.catalog)
         XCTAssertTrue(closed.blocks(hostname: "unlisted.test", outgoing: true))
-        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: raw))
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: false, payload: raw))
         let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
             extensionAvailable: true, extensionActivation: { $0() })
         try await waitUntil { !controller.busy }
@@ -266,6 +270,106 @@ final class BlockingControllerTests: XCTestCase {
         XCTAssertTrue(applied.blocks(hostname: "inline-extra.test", outgoing: true))
         XCTAssertTrue(applied.blocks(hostname: "native-only.test", outgoing: true))
         XCTAssertTrue(applied.strictUnknownDestinations)
+    }
+
+    @MainActor
+    func testEnabledNativeRecoveryAutomaticallyAppliesOnceAndClearsWarning() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let raw = Data("corrupt native v2".utf8)
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: raw))
+        preferences.beforeApply = {
+            do { XCTAssertEqual(try self.nativeRecoveryCopies(for: file).count, 1) }
+            catch { XCTFail("Native recovery copy was unavailable before apply: \(error)") }
+        }
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil {
+            !controller.busy && (controller.status.contains("runtime unverified") || controller.status.contains("apply protected rules"))
+        }
+        XCTAssertEqual(preferences.applyCount, 1)
+        XCTAssertTrue(controller.nativeRepairWarning.isEmpty)
+        XCTAssertTrue(controller.error.isEmpty)
+        XCTAssertTrue(controller.nativeRecoveryNote.contains("could not be recovered"))
+        guard preferences.applyCount == 1 else { return }
+        let repaired = try BlockingPolicy(data: XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
+        XCTAssertFalse(repaired.blocks(hostname: "ordinary-unlisted.test", outgoing: true))
+        XCTAssertTrue(repaired.blocks(hostname: "youtube.com", outgoing: true))
+        XCTAssertTrue(repaired.blocks(hostname: nil, outgoing: true))
+        for _ in 0..<3 { controller.refresh(); await Task.yield() }
+        try await waitUntil { !controller.busy }
+        XCTAssertEqual(preferences.applyCount, 1)
+    }
+
+    @MainActor
+    func testAutomaticRecoveryFailureDoesNotLoopOrChangeNativeBytes() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let raw = Data("corrupt native v2".utf8)
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: raw))
+        preferences.applyFailure = CocoaError(.fileWriteNoPermission)
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil { !controller.busy && controller.status.contains("apply protected rules") }
+        XCTAssertEqual(preferences.applyCount, 1)
+        XCTAssertTrue(controller.error.contains("not updated"))
+        for _ in 0..<3 { controller.refresh(); await Task.yield() }
+        try await waitUntil { !controller.busy }
+        XCTAssertEqual(preferences.applyCount, 1)
+        XCTAssertEqual(preferences.state.payload, raw)
+        XCTAssertFalse(controller.nativeRepairWarning.isEmpty)
+        XCTAssertEqual(try nativeRecoveryCopies(for: file).count, 1)
+    }
+
+    @MainActor
+    func testRecoveryOfInlineBundledListAddsOnlyItsExtraDomains() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        var native = try CommittedBlockingRules(catalog: Self.catalog).configuration
+        native.sites = [BlockingHostname("native-only.test")!]
+        native.lists[.gambling]!.insert(BlockingHostname("inline-extra.test")!)
+        let raw = Data(String(decoding: try native.providerData(), as: UTF8.self)
+            .replacingOccurrences(of: "4eb9d0d020d546521c4d90485d7c423f6fbb1336e880d003fd08dcce5c7675d3", with: String(repeating: "0", count: 64)).utf8)
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: false, payload: raw))
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil { !controller.busy }
+        XCTAssertTrue(controller.ready)
+        XCTAssertTrue(controller.configuration.sites == CommittedBlockingRules.protectedSites.union([
+            BlockingHostname("native-only.test")!, BlockingHostname("inline-extra.test")!
+        ]))
+        XCTAssertEqual(preferences.applyCount, 0)
+    }
+
+    @MainActor
+    func testMalformedActiveCategoryKeepsRecoverableNativeSitesAndOtherInlineAdditions() async throws {
+        for malformed in [false, true] {
+            let file = try rulesFile()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            var native = BlockingConfiguration()
+            native.sites = [BlockingHostname("native-only.test")!]
+            native.categories = [.adult]
+            native.lists[.adult] = [BlockingHostname("valid-inline.test")!]
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: native.providerData()) as? [String: Any])
+            object["categories"] = ["adult", "gambling"]
+            if malformed {
+                var sources = try XCTUnwrap(object["sources"] as? [Any])
+                sources.append(contentsOf: ["gambling", ["inline": ["_0": [["value": "https://invalid.test"]]]]])
+                object["sources"] = sources
+            }
+            let raw = try JSONSerialization.data(withJSONObject: object)
+            XCTAssertThrowsError(try BlockingConfiguration.decodeProvider(raw, catalog: Self.catalog))
+            let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: false, payload: raw))
+            let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+                extensionAvailable: true, extensionActivation: { $0() })
+            try await waitUntil { !controller.busy }
+            XCTAssertTrue(controller.ready)
+            XCTAssertTrue(controller.configuration.sites.contains(BlockingHostname("native-only.test")!))
+            XCTAssertTrue(controller.configuration.sites.contains(BlockingHostname("valid-inline.test")!))
+            XCTAssertTrue(controller.nativeRepairWarning.contains("could not be recovered"))
+            XCTAssertEqual(preferences.applyCount, 0)
+            XCTAssertEqual(try nativeRecoveryCopies(for: file).count, 1)
+        }
     }
 
     @MainActor

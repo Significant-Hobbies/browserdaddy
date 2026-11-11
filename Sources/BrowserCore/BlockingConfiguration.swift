@@ -108,22 +108,24 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
 
     /// Host maintenance only: recover explicit and active inline additions without trusting
     /// a bundled reference. The provider must continue to use decodeProvider's strict hashes.
-    public static func recoverProviderAdditions(_ data: Data) throws -> Self {
+    public static func recoverProviderAdditions(_ data: Data) throws -> (configuration: Self, incomplete: Bool) {
         try validateProviderSize(data)
-        let value = try JSONDecoder().decode(BlockingProviderConfiguration.self, from: data)
+        let value = try JSONDecoder().decode(BlockingProviderRecoveryConfiguration.self, from: data)
         guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
         var result = Self()
         result.sites = value.sites
+        var incomplete = value.incomplete
         for category in value.categories {
-            guard let source = value.sources[category] else { throw CocoaError(.fileReadCorruptFile) }
+            guard let source = value.sources[category]?.value else { incomplete = true; continue }
             switch source {
             case .bundled: break
             case .inline(let hosts):
-                guard !hosts.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
-                result.sites.formUnion(hosts)
+                guard !hosts.isEmpty else { incomplete = true; continue }
+                result.categories.insert(category)
+                result.lists[category] = hosts
             }
         }
-        return result
+        return (result, incomplete)
     }
 
     public func localData() throws -> Data {
@@ -296,6 +298,32 @@ private struct BlockingProviderConfiguration: Codable, Equatable {
     let categories: Set<BlockingCategory>
     let sources: [BlockingCategory: BlockingListSource]
     let strictUnknownDestinations: Bool
+}
+
+private struct RecoverableBlockingListSource: Decodable {
+    let value: BlockingListSource?
+    init(from decoder: Decoder) throws { value = try? BlockingListSource(from: decoder) }
+}
+
+private struct BlockingProviderRecoveryConfiguration: Decodable {
+    let version: Int
+    let sites: Set<BlockingHostname>
+    let categories: Set<BlockingCategory>
+    let sources: [BlockingCategory: RecoverableBlockingListSource]
+    let incomplete: Bool
+
+    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        sites = try values.decode(Set<BlockingHostname>.self, forKey: .sites)
+        let categories = try? values.decode(Set<BlockingCategory>.self, forKey: .categories)
+        let sources = try? values.decode([BlockingCategory: RecoverableBlockingListSource].self, forKey: .sources)
+        self.categories = categories ?? []
+        self.sources = sources ?? [:]
+        incomplete = categories == nil || sources == nil
+    }
 }
 
 public enum BlockingTransportError: LocalizedError {
