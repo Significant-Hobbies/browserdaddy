@@ -106,6 +106,26 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         return result
     }
 
+    /// Host maintenance only: recover explicit and active inline additions without trusting
+    /// a bundled reference. The provider must continue to use decodeProvider's strict hashes.
+    public static func recoverProviderAdditions(_ data: Data) throws -> Self {
+        try validateProviderSize(data)
+        let value = try JSONDecoder().decode(BlockingProviderConfiguration.self, from: data)
+        guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
+        var result = Self()
+        result.sites = value.sites
+        for category in value.categories {
+            guard let source = value.sources[category] else { throw CocoaError(.fileReadCorruptFile) }
+            switch source {
+            case .bundled: break
+            case .inline(let hosts):
+                guard !hosts.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+                result.sites.formUnion(hosts)
+            }
+        }
+        return result
+    }
+
     public func localData() throws -> Data {
         try validate()
         let data = try JSONEncoder().encode(self)
@@ -283,7 +303,7 @@ public enum BlockingTransportError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .configurationTooLarge: return "These additions exceed the macOS filter limit. Existing protected rules have been preserved."
+        case .configurationTooLarge: return "The protected rules exceed the macOS filter limit. Existing saved rules have been preserved; assisted maintenance is required."
         case .unsupportedVersion: return "Unsupported filter rules version."
         case .unsupportedReference: return "Unsupported bundled category reference."
         case .missingResource: return "A bundled category list is missing."

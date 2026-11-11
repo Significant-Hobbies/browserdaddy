@@ -1,5 +1,6 @@
 import AppKit
 import BrowserCore
+import CryptoKit
 import NetworkExtension
 import SystemExtensions
 import SwiftUI
@@ -10,6 +11,7 @@ struct BlockingFilterState: Sendable {
     var legacyPayload: Data? = nil
     var currentRulesPresent = false
     var legacyRulesPresent = false
+    var nativeConfigurationData: Data? = nil
 
     nonisolated func decodedRules(catalog: BlockingListCatalog) throws -> BlockingConfiguration? {
         if currentRulesPresent || payload != nil {
@@ -22,6 +24,51 @@ struct BlockingFilterState: Sendable {
             return try BlockingConfiguration.decode(legacyPayload)
         }
         return nil
+    }
+
+    nonisolated func maintenanceRules(catalog: BlockingListCatalog) throws -> (BlockingConfiguration?, String) {
+        // Size failures remain unavailable, rather than being mistaken for unknown/corrupt rules.
+        if currentRulesPresent || payload != nil {
+            if let payload { try BlockingConfiguration.validateProviderSize(payload) }
+        } else if let legacyPayload, legacyPayload.count > 512 * 1024 {
+            throw BlockingTransportError.configurationTooLarge
+        }
+        do { return (try decodedRules(catalog: catalog), "") }
+        catch {
+            // A present v2 always takes precedence, including malformed v2. Never read v1 here.
+            if let payload, let additions = try? BlockingConfiguration.recoverProviderAdditions(payload) {
+                return (additions, "Native filter rules required recovery. A raw settings copy was preserved; explicit websites and active inline additions were recovered. The prepared rules use the verified bundled lists.")
+            }
+            return (nil, "Native filter rules required recovery. A raw settings copy was preserved, but unknown native-only additions could not be recovered. The prepared rules use the verified baseline and known local rules; assisted maintenance can inspect the recovery copy.")
+        }
+    }
+
+    nonisolated func preserveNativeRecovery(beside url: URL) throws {
+        let data: Data
+        if let nativeConfigurationData { data = nativeConfigurationData }
+        else {
+            var vendor: [String: Any] = ["currentRulesPresent": currentRulesPresent, "legacyRulesPresent": legacyRulesPresent]
+            if let payload { vendor[BlockingConfiguration.providerRulesKey] = payload }
+            if let legacyPayload { vendor[BlockingConfiguration.legacyProviderRulesKey] = legacyPayload }
+            data = try PropertyListSerialization.data(fromPropertyList: vendor, format: .binary, options: 0)
+        }
+        let directory = url.appendingPathExtension("native-recovery")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        let name = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let recovery = directory.appendingPathComponent(name + ".plist")
+        if FileManager.default.fileExists(atPath: recovery.path) {
+            guard try Data(contentsOf: recovery) == data else { throw CocoaError(.fileWriteFileExists) }
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recovery.path)
+            return
+        }
+        let temporary = directory.appendingPathComponent(UUID().uuidString + ".tmp")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        // Publish complete private bytes exclusively, preserving any existing recovery copy.
+        try FileManager.default.linkItem(at: temporary, to: recovery)
     }
 }
 
@@ -67,7 +114,8 @@ private final class SystemBlockingPreferences: BlockingPreferences {
             payload: vendor?[BlockingConfiguration.providerRulesKey] as? Data,
             legacyPayload: vendor?[BlockingConfiguration.legacyProviderRulesKey] as? Data,
             currentRulesPresent: vendor?.keys.contains(BlockingConfiguration.providerRulesKey) == true,
-            legacyRulesPresent: vendor?.keys.contains(BlockingConfiguration.legacyProviderRulesKey) == true)
+            legacyRulesPresent: vendor?.keys.contains(BlockingConfiguration.legacyProviderRulesKey) == true,
+            nativeConfigurationData: try vendor.map { try PropertyListSerialization.data(fromPropertyList: $0, format: .binary, options: 0) })
     }
 
     func apply(_ payload: CommittedBlockingPayload) async throws {
@@ -115,6 +163,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     @Published private(set) var busy = false
     @Published var error = ""
     @Published private(set) var loadError = ""
+    @Published private(set) var nativeRepairWarning = ""
     private var refreshGeneration: UInt64 = 0
     private let preview: Bool
     private var rulesURL: URL?
@@ -134,12 +183,17 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             ? FileManager.default.temporaryDirectory.appendingPathComponent("BrowserDaddy-blocking-preview-\(UUID().uuidString).json")
             : FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
                 .appendingPathComponent(BlockingConfiguration.filename))
+        loadRules()
+    }
+
+    private func loadRules() {
+        guard !busy else { return }
         let url = rulesURL
         status = "Loading local rules…"
         busy = true
         Task {
             do {
-                let state = preview ? BlockingFilterState(enabled: false, payload: nil) : try await self.preferences.load()
+                let state = preview || !extensionBundled ? BlockingFilterState(enabled: false, payload: nil) : try await self.preferences.load()
                 enabled = state.enabled
                 let loaded = try await Task.detached(priority: .userInitiated) {
                     guard let url else { throw CocoaError(.fileNoSuchFile) }
@@ -147,24 +201,28 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                     if FileManager.default.fileExists(atPath: url.path) {
                         previous.append(try BlockingConfiguration.load(from: url))
                     }
-                    if let native = try state.decodedRules(catalog: Self.bundledListCatalog) { previous.append(native) }
+                    let (native, warning) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
+                    if let native { previous.append(native) }
                     let rules = try CommittedBlockingRules(preserving: previous, catalog: Self.bundledListCatalog)
                     let payload = try rules.providerPayload()
+                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: url) }
                     try rules.save(to: url)
-                    return (rules, payload)
+                    return (rules, payload, warning)
                 }.value
                 committed = loaded.0
                 payload = loaded.1
                 configuration = loaded.0.configuration
+                nativeRepairWarning = loaded.2
+                error = loaded.2
+                loadError = ""
                 ready = true
                 busy = false
                 refresh()
             } catch {
                 busy = false
-                self.error = "Could not load local blocking rules. Editing is disabled to preserve the saved file: \(error.localizedDescription)"
+                self.error = "Could not prepare protected blocking rules. Saved data is preserved and editing is unavailable. Refresh status to retry; assisted maintenance may be required: \(error.localizedDescription)"
                 loadError = self.error
                 status = "Rules unavailable · saved file preserved"
-                refresh()
             }
         }
     }
@@ -182,6 +240,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
     }
 
     func refresh() {
+        if !ready { loadRules(); return }
         refreshGeneration &+= 1
         let generation = refreshGeneration
         guard !(busy && !ready) else { return }
@@ -225,19 +284,21 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         busy = true
         Task {
             do {
-                let state = preview ? BlockingFilterState(enabled: false, payload: nil) : try await preferences.load()
+                let state = preview || !extensionBundled ? BlockingFilterState(enabled: false, payload: nil) : try await preferences.load()
                 let value = try await Task.detached(priority: .userInitiated) {
-                    let previous = try state.decodedRules(catalog: Self.bundledListCatalog)
+                    let (previous, warning) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     let merged = try previous.map { try committed.preserving($0) } ?? committed
                     let value = try merged.addingSite(host)
                     let payload = try value.providerPayload()
+                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL) }
                     try value.save(to: rulesURL)
-                    return (value, payload)
+                    return (value, payload, warning)
                 }.value
                 self.committed = value.0
                 payload = value.1
                 configuration = value.0.configuration
                 ruleDelivery = .pending
+                if !value.2.isEmpty { nativeRepairWarning = value.2 }
                 error = ""
                 busy = false
                 refresh()
@@ -274,15 +335,17 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             do {
                 let state = try await preferences.load()
                 let value = try await Task.detached(priority: .userInitiated) {
-                    let previous = try state.decodedRules(catalog: Self.bundledListCatalog)
+                    let (previous, warning) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     let value = try previous.map { try committed.preserving($0) } ?? committed
                     let payload = try value.providerPayload()
+                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL) }
                     try value.save(to: rulesURL)
-                    return (value, payload)
+                    return (value, payload, warning)
                 }.value
                 self.committed = value.0
                 payload = value.1
                 configuration = value.0.configuration
+                if !value.2.isEmpty { nativeRepairWarning = value.2 }
                 try await preferences.apply(value.1)
                 ruleDelivery = .current
                 finish(nil)
