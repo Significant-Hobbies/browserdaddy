@@ -148,26 +148,114 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     }
 }
 
+/// Only this value can produce an app-applied policy. Legacy DTOs remain decodable.
+public struct CommittedBlockingRules: Sendable, Equatable {
+    public static let protectedSites = Set(["youtube.com", "youtu.be", "youtube-nocookie.com", "reddit.com", "redd.it", "instagram.com"].map { BlockingHostname($0)! })
+    public let configuration: BlockingConfiguration
+
+    public init(preserving configurations: [BlockingConfiguration] = [], catalog: BlockingListCatalog = .main) throws {
+        var result = BlockingConfiguration()
+        result.categories = Set(BlockingCategory.allCases)
+        result.strictUnknownDestinations = true
+        result.sites = Self.protectedSites
+        for category in BlockingCategory.allCases {
+            result.lists[category] = try catalog.resolve(category, sha256: BlockingListCatalog.rawDigests[category]!)
+        }
+        for previous in configurations {
+            result.sites.formUnion(previous.sites)
+            // Inactive custom lists were never a blocking decision and must stay inactive.
+            for category in previous.categories {
+                result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
+            }
+        }
+        configuration = result
+    }
+
+    private init(configuration: BlockingConfiguration) { self.configuration = configuration }
+
+    public func addingSite(_ site: BlockingHostname) throws -> Self {
+        var result = configuration
+        result.sites.insert(site)
+        let value = Self(configuration: result)
+        _ = try value.providerPayload()
+        return value
+    }
+
+    public func preserving(_ previous: BlockingConfiguration) throws -> Self {
+        var result = configuration
+        result.sites.formUnion(previous.sites)
+        for category in previous.categories {
+            result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
+        }
+        let value = Self(configuration: result)
+        _ = try value.providerPayload()
+        return value
+    }
+
+    public func providerPayload() throws -> CommittedBlockingPayload {
+        let value = BlockingProviderConfiguration(version: 2, sites: configuration.sites,
+            categories: configuration.categories,
+            sources: Dictionary(uniqueKeysWithValues: BlockingCategory.allCases.map {
+                ($0, .bundled(sha256: BlockingListCatalog.rawDigests[$0]!))
+            }), strictUnknownDestinations: true)
+        return try CommittedBlockingPayload(data: JSONEncoder().encode(value))
+    }
+
+    public func save(to url: URL) throws {
+        _ = try providerPayload()
+        let existing = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+        if let existing, try BlockingConfiguration.decode(existing) == configuration { return }
+        let data = try configuration.localData()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let existing {
+            let recovery = url.appendingPathExtension("pre-commitment")
+            if !FileManager.default.fileExists(atPath: recovery.path) {
+                let temporary = url.appendingPathExtension("recovery-" + UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                try existing.write(to: temporary, options: .atomic)
+                // An exclusive hard link publishes complete bytes without replacing a prior backup.
+                try FileManager.default.linkItem(at: temporary, to: recovery)
+            }
+        }
+        try data.write(to: url, options: .atomic)
+    }
+}
+
+public struct CommittedBlockingPayload: Sendable {
+    public let data: Data
+    fileprivate init(data: Data) throws {
+        try BlockingConfiguration.validateProviderSize(data)
+        self.data = data
+    }
+
+    public func matches(_ applied: Data?) -> Bool {
+        guard let applied,
+              let actual = try? JSONDecoder().decode(BlockingProviderConfiguration.self, from: applied),
+              let expected = try? JSONDecoder().decode(BlockingProviderConfiguration.self, from: data) else { return false }
+        return actual == expected
+    }
+}
+
 /// The provider starts closed and swaps only fully validated snapshots.
 public struct BlockingPolicy: Sendable {
     private let configuration: BlockingConfiguration?
 
     public init() { configuration = nil }
     public init(data: Data, catalog: BlockingListCatalog = .main) throws {
-        configuration = try BlockingConfiguration.decodeProvider(data, catalog: catalog)
+        configuration = try CommittedBlockingRules(preserving: [BlockingConfiguration.decodeProvider(data, catalog: catalog)], catalog: catalog).configuration
     }
 
     public init(committedProviderData: Data?, catalog: BlockingListCatalog = .main) {
-        configuration = committedProviderData.flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+        configuration = committedProviderData.flatMap { try? CommittedBlockingRules(preserving: [BlockingConfiguration.decodeProvider($0, catalog: catalog)], catalog: catalog).configuration }
     }
 
     public init(vendorConfiguration: [String: Any]?, catalog: BlockingListCatalog = .main) {
         if let vendorConfiguration, vendorConfiguration.keys.contains(BlockingConfiguration.providerRulesKey) {
             configuration = (vendorConfiguration[BlockingConfiguration.providerRulesKey] as? Data)
-                .flatMap { try? BlockingConfiguration.decodeProvider($0, catalog: catalog) }
+                .flatMap { try? CommittedBlockingRules(preserving: [BlockingConfiguration.decodeProvider($0, catalog: catalog)], catalog: catalog).configuration }
         } else if let data = vendorConfiguration?[BlockingConfiguration.legacyProviderRulesKey] as? Data,
                   data.count <= 512 * 1024 {
-            configuration = try? BlockingConfiguration.decode(data).activeConfiguration
+            configuration = try? CommittedBlockingRules(preserving: [BlockingConfiguration.decode(data)], catalog: catalog).configuration
         } else {
             configuration = nil
         }
@@ -178,12 +266,12 @@ public struct BlockingPolicy: Sendable {
     }
 }
 
-private enum BlockingListSource: Codable {
+private enum BlockingListSource: Codable, Equatable {
     case bundled(sha256: String)
     case inline(Set<BlockingHostname>)
 }
 
-private struct BlockingProviderConfiguration: Codable {
+private struct BlockingProviderConfiguration: Codable, Equatable {
     let version: Int
     let sites: Set<BlockingHostname>
     let categories: Set<BlockingCategory>
@@ -196,7 +284,7 @@ public enum BlockingTransportError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .configurationTooLarge: return "These rules exceed the macOS filter limit. Use smaller custom lists or the bundled categories."
+        case .configurationTooLarge: return "These additions exceed the macOS filter limit. Existing protected rules have been preserved."
         case .unsupportedVersion: return "Unsupported filter rules version."
         case .unsupportedReference: return "Unsupported bundled category reference."
         case .missingResource: return "A bundled category list is missing."

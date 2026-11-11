@@ -2,13 +2,117 @@ import XCTest
 @testable import BrowserCore
 
 final class BlockingConfigurationTests: XCTestCase {
-    func testLegacyNativePreferencesKeepTheirPolicyUntilV2IsCommitted() throws {
+    func testWeakValidNativeV2CannotRemoveCommittedProtection() throws {
+        let data = try BlockingConfiguration().providerData()
+        let policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: data], catalog: Self.catalog)
+        for domain in ["youtube.com", "youtu.be", "youtube-nocookie.com", "reddit.com", "redd.it", "instagram.com"] {
+            XCTAssertTrue(policy.blocks(hostname: "sub." + domain, outgoing: true), domain)
+        }
+        let full = try fullConfiguration()
+        for category in BlockingCategory.allCases {
+            let domain = try XCTUnwrap(full.lists[category]?.first)
+            XCTAssertTrue(policy.blocks(hostname: domain.value, outgoing: true), category.rawValue)
+        }
+        XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
+    }
+
+    func testEveryProviderConstructorStrengthensValidWeakAndLegacyRules() throws {
+        var weak = BlockingConfiguration()
+        weak.sites = [BlockingHostname("additional.test")!]
+        weak.categories = [.adult]
+        weak.lists[.adult] = [BlockingHostname("custom-adult.test")!]
+        weak.lists[.gambling] = [BlockingHostname("inactive.test")!]
+        let payload = try weak.providerData()
+        let policies = [
+            try BlockingPolicy(data: payload, catalog: Self.catalog),
+            BlockingPolicy(committedProviderData: payload, catalog: Self.catalog),
+            BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: payload], catalog: Self.catalog),
+            BlockingPolicy(vendorConfiguration: [BlockingConfiguration.legacyProviderRulesKey: try weak.localData()], catalog: Self.catalog)
+        ]
+        for policy in policies {
+            for domain in ["additional.test", "custom-adult.test", "youtube.com", "reddit.com", "instagram.com"] {
+                XCTAssertTrue(policy.blocks(hostname: "sub." + domain, outgoing: true))
+            }
+            XCTAssertFalse(policy.blocks(hostname: "inactive.test", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
+            for domain in [nil, "127.0.0.1", "::1"] as [String?] {
+                XCTAssertTrue(policy.blocks(hostname: domain, outgoing: true))
+                XCTAssertFalse(policy.blocks(hostname: domain, outgoing: false))
+            }
+        }
+        for catalog in [BlockingListCatalog { _ in throw BlockingTransportError.missingResource }, BlockingListCatalog { _ in Data("bad".utf8) }] {
+            let empty = try BlockingConfiguration().providerData()
+            XCTAssertThrowsError(try BlockingPolicy(data: empty, catalog: catalog))
+            let policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: empty], catalog: catalog)
+            XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: nil, outgoing: false))
+        }
+    }
+
+    func testCommittedMigrationKeepsActiveExtrasCompactAndPreservesOriginalBytes() throws {
+        var legacy = BlockingConfiguration()
+        legacy.sites = [BlockingHostname("extra.test")!]
+        legacy.categories = [.adult]
+        legacy.lists[.adult] = [BlockingHostname("custom-adult.test")!]
+        legacy.lists[.gambling] = [BlockingHostname("inactive.test")!]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let file = root.appendingPathComponent("rules.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try legacy.save(to: file)
+        let original = try Data(contentsOf: file)
+        let committed = try CommittedBlockingRules(preserving: [legacy], catalog: Self.catalog)
+        let added = try committed.addingSite(BlockingHostname("added.test")!)
+        let payload = try added.providerPayload()
+        XCTAssertLessThan(payload.data.count, 2048)
+        let decoded = try BlockingConfiguration.decodeProvider(payload.data, catalog: Self.catalog)
+        XCTAssertEqual(decoded, added.configuration)
+        XCTAssertTrue(decoded.sites.contains(BlockingHostname("custom-adult.test")!))
+        XCTAssertFalse(decoded.sites.contains(BlockingHostname("inactive.test")!))
+        try added.save(to: file)
+        XCTAssertEqual(try Data(contentsOf: file.appendingPathExtension("pre-commitment")), original)
+        let migrated = try Data(contentsOf: file)
+        let again = try CommittedBlockingRules(preserving: [BlockingConfiguration.load(from: file)], catalog: Self.catalog)
+        try again.save(to: file)
+        XCTAssertEqual(again, added)
+        XCTAssertEqual(try Data(contentsOf: file), migrated)
+        XCTAssertEqual(try Data(contentsOf: file.appendingPathExtension("pre-commitment")), original)
+        XCTAssertFalse(payload.matches(try BlockingConfiguration().providerData()))
+        XCTAssertTrue(payload.matches(try added.providerPayload().data))
+    }
+
+    func testOneOversizeAdditionPreservesValidCommittedRulesAndSavedBytes() throws {
+        let base = try CommittedBlockingRules(catalog: Self.catalog)
+        let hosts = (0..<20000).map { BlockingHostname("large-\($0).test")! }
+        var low = 0
+        var high = hosts.count
+        while low + 1 < high {
+            let middle = (low + high) / 2
+            var previous = BlockingConfiguration()
+            previous.sites = Set(hosts.prefix(middle))
+            if (try? base.preserving(previous)) != nil { low = middle }
+            else { high = middle }
+        }
+        var previous = BlockingConfiguration()
+        previous.sites = Set(hosts.prefix(low))
+        let fitting = try base.preserving(previous)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try fitting.save(to: file)
+        let original = try Data(contentsOf: file)
+        XCTAssertNoThrow(try fitting.providerPayload())
+        XCTAssertThrowsError(try fitting.addingSite(hosts[low]))
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertEqual(fitting.configuration.sites, previous.sites.union(CommittedBlockingRules.protectedSites))
+    }
+
+    func testLegacyNativePreferencesReceiveTheFloorAndBadPresentV2NeverFallsBack() throws {
         var legacy = BlockingConfiguration()
         legacy.sites = [BlockingHostname("blocked.test")!]
         legacy.categories = [.adult]
         legacy.lists[.adult] = [BlockingHostname("adult.test")!]
         let old = try legacy.localData()
-        var policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.legacyProviderRulesKey: old])
+        var policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.legacyProviderRulesKey: old], catalog: Self.catalog)
         XCTAssertTrue(policy.blocks(hostname: "sub.blocked.test", outgoing: true))
         XCTAssertTrue(policy.blocks(hostname: "sub.adult.test", outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
@@ -16,18 +120,18 @@ final class BlockingConfigurationTests: XCTestCase {
             policy = BlockingPolicy(vendorConfiguration: [
                 BlockingConfiguration.legacyProviderRulesKey: old,
                 BlockingConfiguration.providerRulesKey: invalid
-            ])
+            ], catalog: Self.catalog)
             XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
         }
         let current = try legacy.providerData()
         policy = BlockingPolicy(vendorConfiguration: [
             BlockingConfiguration.legacyProviderRulesKey: Data("invalid".utf8),
             BlockingConfiguration.providerRulesKey: current
-        ])
+        ], catalog: Self.catalog)
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
         policy = BlockingPolicy(vendorConfiguration: [
             BlockingConfiguration.legacyProviderRulesKey: Data(repeating: 0, count: 512 * 1024 + 1)
-        ])
+        ], catalog: Self.catalog)
         XCTAssertTrue(policy.blocks(hostname: "allowed.test", outgoing: true))
     }
 
@@ -38,10 +142,10 @@ final class BlockingConfigurationTests: XCTestCase {
         XCTAssertFalse(policy.blocks(hostname: nil, outgoing: false))
         var config = BlockingConfiguration()
         config.sites = [BlockingHostname("blocked.test")!]
-        policy = try BlockingPolicy(data: config.providerData())
+        policy = try BlockingPolicy(data: config.providerData(), catalog: Self.catalog)
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
         XCTAssertTrue(policy.blocks(hostname: "blocked.test", outgoing: true))
-        XCTAssertThrowsError(try { policy = try BlockingPolicy(data: Data("corrupt".utf8)) }())
+        XCTAssertThrowsError(try { policy = try BlockingPolicy(data: Data("corrupt".utf8), catalog: Self.catalog) }())
         XCTAssertTrue(policy.blocks(hostname: "blocked.test", outgoing: true))
         XCTAssertFalse(policy.blocks(hostname: "allowed.test", outgoing: true))
     }
@@ -150,7 +254,7 @@ final class BlockingConfigurationTests: XCTestCase {
         let data = try config.providerData()
         XCTAssertLessThan(data.count, 1024)
         XCTAssertEqual(try BlockingConfiguration.decodeProvider(data, catalog: Self.catalog), config)
-        let policy = try BlockingPolicy(data: data, catalog: Self.catalog)
+        let policy = try BlockingPolicy(data: BlockingConfiguration().providerData(), catalog: Self.catalog)
         for category in BlockingCategory.allCases {
             for host in config.lists[category]! {
                 XCTAssertTrue(policy.blocks(hostname: host.value, outgoing: true))
