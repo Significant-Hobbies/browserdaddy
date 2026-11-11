@@ -11,6 +11,9 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static let maximumProviderBytes = 480 * 1024
     public var version = 1
     public var sites: Set<BlockingHostname> = []
+    public var scheduledSites: Set<ScheduledSiteBlock> = [] {
+        didSet { version = scheduledSites.isEmpty ? 1 : 2 }
+    }
     public var categories: Set<BlockingCategory> = []
     public var lists: [BlockingCategory: Set<BlockingHostname>] = [:]
     public var strictUnknownDestinations = false
@@ -18,7 +21,7 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case version, sites, categories, lists, strictUnknownDestinations
+        case version, sites, categories, lists, strictUnknownDestinations, scheduledSites
     }
 
     public init(from decoder: Decoder) throws {
@@ -28,6 +31,9 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         categories = try values.decode(Set<BlockingCategory>.self, forKey: .categories)
         lists = try values.decode([BlockingCategory: Set<BlockingHostname>].self, forKey: .lists)
         strictUnknownDestinations = try values.decodeIfPresent(Bool.self, forKey: .strictUnknownDestinations) ?? false
+        scheduledSites = values.contains(.scheduledSites) ? try values.decode(Set<ScheduledSiteBlock>.self, forKey: .scheduledSites) : []
+        guard (version == 1 && scheduledSites.isEmpty) || (version == 2 && !scheduledSites.isEmpty),
+              scheduledSites.count <= ScheduledSiteBlock.maximumCount else { throw CocoaError(.fileReadCorruptFile) }
     }
 
     public var activeConfiguration: Self {
@@ -40,13 +46,14 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         SiteBlockingRules(blockedSites: sites, blockedCategories: categories, categorizedSites: lists)
     }
 
-    public func blocks(hostname: String?, outgoing: Bool) -> Bool {
+    public func blocks(hostname: String?, outgoing: Bool, at date: Date = Date(), timeZone: TimeZone = .autoupdatingCurrent) -> Bool {
         var host = hostname ?? ""
         if host.hasSuffix(".") { host.removeLast() }
         guard BlockingHostname(host) != nil else {
             return outgoing && strictUnknownDestinations
         }
         return rules.decision(for: host) == .blocked
+            || scheduledSites.contains { $0.matches(hostname: host) && $0.isActive(at: date, timeZone: timeZone) }
     }
 
     public static func load(from url: URL) throws -> Self {
@@ -72,8 +79,8 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
                 sources[category] = .inline(hosts)
             }
         }
-        let value = BlockingProviderConfiguration(version: 2, sites: sites, categories: categories,
-            sources: sources, strictUnknownDestinations: strictUnknownDestinations)
+        let value = BlockingProviderConfiguration(version: scheduledSites.isEmpty ? 2 : 3, sites: sites, categories: categories,
+            sources: sources, strictUnknownDestinations: strictUnknownDestinations, scheduledSites: scheduledSites)
         let data = try JSONEncoder().encode(value)
         try Self.validateProviderSize(data)
         return data
@@ -91,9 +98,10 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static func decodeProvider(_ data: Data, catalog: BlockingListCatalog = .main) throws -> Self {
         try validateProviderSize(data)
         let value = try JSONDecoder().decode(BlockingProviderConfiguration.self, from: data)
-        guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
+        try value.validate()
         var result = Self()
         result.sites = value.sites
+        result.scheduledSites = value.scheduledSites
         result.categories = value.categories
         result.strictUnknownDestinations = value.strictUnknownDestinations
         for (category, source) in value.sources {
@@ -111,9 +119,9 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public static func recoverProviderAdditions(_ data: Data) throws -> (configuration: Self, incomplete: Bool) {
         try validateProviderSize(data)
         let value = try JSONDecoder().decode(BlockingProviderRecoveryConfiguration.self, from: data)
-        guard value.version == 2 else { throw BlockingTransportError.unsupportedVersion }
         var result = Self()
         result.sites = value.sites
+        result.scheduledSites = value.scheduledSites
         var incomplete = value.incomplete
         for category in value.categories {
             guard let source = value.sources[category]?.value else { incomplete = true; continue }
@@ -128,6 +136,11 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         return (result, incomplete)
     }
 
+    public static func requireRecoveryValidation(_ data: Data) throws {
+        try validateProviderSize(data)
+        _ = try JSONDecoder().decode(BlockingProviderRecoveryConfiguration.self, from: data)
+    }
+
     public func localData() throws -> Data {
         try validate()
         let data = try JSONEncoder().encode(self)
@@ -136,7 +149,8 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     }
 
     private func validate() throws {
-        guard version == 1,
+        guard version == (scheduledSites.isEmpty ? 1 : 2),
+              scheduledSites.count <= ScheduledSiteBlock.maximumCount,
               categories.allSatisfy({ !(lists[$0]?.isEmpty ?? true) }) else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -185,6 +199,7 @@ public struct CommittedBlockingRules: Sendable, Equatable {
         }
         for previous in configurations {
             result.sites.formUnion(previous.sites)
+            result.scheduledSites.formUnion(previous.scheduledSites)
             for category in previous.categories {
                 result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
             }
@@ -202,9 +217,18 @@ public struct CommittedBlockingRules: Sendable, Equatable {
         return value
     }
 
+    public func addingScheduledSite(_ schedule: ScheduledSiteBlock) throws -> Self {
+        var result = configuration
+        result.scheduledSites.insert(schedule)
+        let value = Self(configuration: result)
+        _ = try value.providerPayload()
+        return value
+    }
+
     public func preserving(_ previous: BlockingConfiguration) throws -> Self {
         var result = configuration
         result.sites.formUnion(previous.sites)
+        result.scheduledSites.formUnion(previous.scheduledSites)
         for category in previous.categories {
             result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
         }
@@ -214,11 +238,11 @@ public struct CommittedBlockingRules: Sendable, Equatable {
     }
 
     public func providerPayload() throws -> CommittedBlockingPayload {
-        let value = BlockingProviderConfiguration(version: 2, sites: configuration.sites,
+        let value = BlockingProviderConfiguration(version: configuration.scheduledSites.isEmpty ? 2 : 3, sites: configuration.sites,
             categories: configuration.categories,
             sources: Dictionary(uniqueKeysWithValues: BlockingCategory.allCases.map {
                 ($0, .bundled(sha256: BlockingListCatalog.rawDigests[$0]!))
-            }), strictUnknownDestinations: true)
+            }), strictUnknownDestinations: true, scheduledSites: configuration.scheduledSites)
         return try CommittedBlockingPayload(data: JSONEncoder().encode(value))
     }
 
@@ -246,6 +270,7 @@ public struct CommittedBlockingPayload: Sendable {
     public let data: Data
     fileprivate init(data: Data) throws {
         try BlockingConfiguration.validateProviderSize(data)
+        try JSONDecoder().decode(BlockingProviderConfiguration.self, from: data).validate()
         self.data = data
     }
 
@@ -282,8 +307,25 @@ public struct BlockingPolicy: Sendable {
         }
     }
 
-    public func blocks(hostname: String?, outgoing: Bool) -> Bool {
-        configuration?.blocks(hostname: hostname, outgoing: outgoing) ?? outgoing
+    public func blocks(hostname: String?, outgoing: Bool, at date: Date = Date(), timeZone: TimeZone = .autoupdatingCurrent) -> Bool {
+        configuration?.blocks(hostname: hostname, outgoing: outgoing, at: date, timeZone: timeZone) ?? outgoing
+    }
+
+    /// Resolve wall-clock activity once for a batch of open scheduled connections.
+    public func evaluatingSchedules(at date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> Self {
+        guard var value = configuration else { return Self() }
+        for schedule in value.scheduledSites where schedule.isActive(at: date, timeZone: timeZone) {
+            value.sites.insert(schedule.hostname)
+        }
+        value.scheduledSites = []
+        return Self(configuration: value)
+    }
+
+    private init(configuration: BlockingConfiguration) { self.configuration = configuration }
+
+    public func hasSchedule(hostname: String?) -> Bool {
+        guard let hostname else { return false }
+        return configuration?.scheduledSites.contains { $0.matches(hostname: hostname) } ?? false
     }
 }
 
@@ -298,6 +340,36 @@ private struct BlockingProviderConfiguration: Codable, Equatable {
     let categories: Set<BlockingCategory>
     let sources: [BlockingCategory: BlockingListSource]
     let strictUnknownDestinations: Bool
+    let scheduledSites: Set<ScheduledSiteBlock>
+
+    init(version: Int, sites: Set<BlockingHostname>, categories: Set<BlockingCategory>,
+         sources: [BlockingCategory: BlockingListSource], strictUnknownDestinations: Bool,
+         scheduledSites: Set<ScheduledSiteBlock>) {
+        self.version = version
+        self.sites = sites
+        self.categories = categories
+        self.sources = sources
+        self.strictUnknownDestinations = strictUnknownDestinations
+        self.scheduledSites = scheduledSites
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources, strictUnknownDestinations, scheduledSites }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        sites = try values.decode(Set<BlockingHostname>.self, forKey: .sites)
+        categories = try values.decode(Set<BlockingCategory>.self, forKey: .categories)
+        sources = try values.decode([BlockingCategory: BlockingListSource].self, forKey: .sources)
+        strictUnknownDestinations = try values.decode(Bool.self, forKey: .strictUnknownDestinations)
+        scheduledSites = values.contains(.scheduledSites) ? try values.decode(Set<ScheduledSiteBlock>.self, forKey: .scheduledSites) : []
+        try validate()
+    }
+
+    func validate() throws {
+        guard (version == 2 && scheduledSites.isEmpty) || (version == 3 && !scheduledSites.isEmpty),
+              scheduledSites.count <= ScheduledSiteBlock.maximumCount else { throw BlockingTransportError.unsupportedVersion }
+    }
 }
 
 private struct RecoverableBlockingValue<Value: Decodable>: Decodable {
@@ -349,12 +421,22 @@ private struct BlockingProviderRecoveryConfiguration: Decodable {
     let categories: Set<BlockingCategory>
     let sources: [BlockingCategory: RecoverableBlockingListSource]
     let incomplete: Bool
+    let scheduledSites: Set<ScheduledSiteBlock>
 
-    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources }
+    private enum CodingKeys: String, CodingKey { case version, sites, categories, sources, scheduledSites }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         version = try values.decode(Int.self, forKey: .version)
+        guard version == 2 || version == 3 else { throw BlockingTransportError.unsupportedVersion }
+        // Schedule recovery is all-or-nothing: never silently discard a commitment.
+        let schedules = values.contains(.scheduledSites)
+            ? try values.decode([ScheduledSiteBlock].self, forKey: .scheduledSites) : []
+        guard schedules.count <= ScheduledSiteBlock.maximumCount,
+              (version == 2 && schedules.isEmpty) || (version == 3 && !schedules.isEmpty) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        scheduledSites = Set(schedules)
         let sites = try? values.decode(RecoverableBlockingValues<BlockingHostname>.self, forKey: .sites)
         let categories = try? values.decode(RecoverableBlockingValues<BlockingCategory>.self, forKey: .categories)
         self.sites = sites?.values ?? []

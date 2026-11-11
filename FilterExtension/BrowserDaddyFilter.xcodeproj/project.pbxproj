@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F09D86FB688E4D5EAAC4A101 /* ScheduledSiteBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09D86FB688E4D5EAAC4A102 /* ScheduledSiteBlock.swift */; };
 		179A66B0521AC1A943953D90 /* FilterDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E9FBEAC5D288DEEE32D66 /* FilterDataProvider.swift */; };
 		3D153EEDEFAC8C121B4EC71F /* LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0D24BF7194B8416DC2541502 /* LICENSE.txt */; };
 		645A02D45C2B96C284DAA822 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0498903CFFDDE48DD81DC9 /* main.swift */; };
@@ -18,6 +19,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        F09D86FB688E4D5EAAC4A102 /* ScheduledSiteBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledSiteBlock.swift; sourceTree = "<group>"; };
 		00E5CE0B09F74BE377178D8E /* Adult.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Adult.txt; sourceTree = "<group>"; };
 		0D24BF7194B8416DC2541502 /* LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE.txt; sourceTree = "<group>"; };
 		274CFFA64EE6208E1C463E63 /* BrowserDaddyFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = BrowserDaddyFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -65,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				6EC098CA3DDE0684C6DD8135 /* BlockingConfiguration.swift */,
+                F09D86FB688E4D5EAAC4A102 /* ScheduledSiteBlock.swift */,
 				6A20447EBEE69A6FA506DFE8 /* SiteBlocking.swift */,
 			);
 			name = BrowserCore;
@@ -142,6 +145,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				86B487161D4E5289F5D65B2E /* BlockingConfiguration.swift in Sources */,
+                F09D86FB688E4D5EAAC4A101 /* ScheduledSiteBlock.swift in Sources */,
 				179A66B0521AC1A943953D90 /* FilterDataProvider.swift in Sources */,
 				A8CC297E399E7481773237BB /* SiteBlocking.swift in Sources */,
 				645A02D45C2B96C284DAA822 /* main.swift in Sources */,
