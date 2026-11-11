@@ -236,6 +236,91 @@ final class BlockingControllerTests: XCTestCase {
 
     private func nativeRecoveryCopies(for file: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(at: file.appendingPathExtension("native-recovery"), includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "plist" }
+    }
+
+    private func recoveryDisclosure(for file: URL) -> URL {
+        file.appendingPathExtension("native-recovery").appendingPathComponent("incomplete-recovery.json")
+    }
+
+    @MainActor
+    func testIncompleteRecoveryDisclosureSurvivesASecondControllerAfterAutoApply() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: Data("bad native v2".utf8)))
+        preferences.beforeApply = { XCTAssertTrue(FileManager.default.fileExists(atPath: self.recoveryDisclosure(for: file).path)) }
+        let first = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil { !first.busy && first.status.contains("runtime unverified") }
+        XCTAssertTrue(first.nativeRecoveryNote.contains("could not be recovered"))
+        XCTAssertTrue(first.error.isEmpty)
+        XCTAssertTrue(first.nativeRepairWarning.isEmpty)
+        let second = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil { !second.busy && second.status.contains("runtime unverified") }
+        XCTAssertTrue(second.nativeRecoveryNote.contains("could not be recovered"))
+        XCTAssertTrue(second.error.isEmpty)
+        XCTAssertTrue(second.nativeRepairWarning.isEmpty)
+        XCTAssertEqual(preferences.applyCount, 1)
+        let marker = recoveryDisclosure(for: file)
+        if FileManager.default.fileExists(atPath: marker.path) {
+            XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: marker.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        }
+    }
+
+    @MainActor
+    func testIncompleteRecoveryDisclosureWriteFailurePreventsLocalAndNativeReplacement() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let original = try BlockingConfiguration().localData()
+        try original.write(to: file)
+        try FileManager.default.createDirectory(at: recoveryDisclosure(for: file), withIntermediateDirectories: true)
+        let raw = Data("bad native v2".utf8)
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: raw))
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil { !controller.busy && (!controller.ready || controller.status.contains("runtime unverified")) }
+        XCTAssertFalse(controller.ready)
+        XCTAssertEqual(preferences.applyCount, 0)
+        XCTAssertEqual(preferences.state.payload, raw)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+    }
+
+    @MainActor
+    func testElementwiseNativeRecoveryKeepsValidSitesCategoriesAndInlineHosts() async throws {
+        for invalidField in ["sites", "categories", "inline"] {
+            let file = try rulesFile()
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+            var sites: [[String: String]] = [["value": "native-only.test"]]
+            var categories = ["adult", "gambling"]
+            var inlineHosts: [[String: String]] = [["value": "valid-adult-extra.test"]]
+            if invalidField == "sites" { sites.append(["value": "https://invalid.test"]) }
+            if invalidField == "inline" { inlineHosts.append(["value": "bad/path"]) }
+            var sources: [Any] = ["adult", ["inline": ["_0": inlineHosts]]]
+            if invalidField == "categories" {
+                categories.append("unknown-future-category")
+                sources.append(contentsOf: ["unknown-future-category", ["inline": ["_0": [["value": "unknown.test"]]]]])
+            }
+            sources.append(contentsOf: ["gambling", ["inline": ["_0": [["value": "valid-gambling-extra.test"]]]]])
+            let raw = try JSONSerialization.data(withJSONObject: ["version": 2, "sites": sites,
+                "categories": categories, "sources": sources, "strictUnknownDestinations": true])
+            XCTAssertThrowsError(try BlockingConfiguration.decodeProvider(raw, catalog: Self.catalog))
+            let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: true, payload: raw))
+            let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+                extensionAvailable: true, extensionActivation: { $0() })
+            try await waitUntil { !controller.busy && controller.status.contains("runtime unverified") }
+            XCTAssertEqual(preferences.applyCount, 1)
+            for host in ["native-only.test", "valid-adult-extra.test", "valid-gambling-extra.test"] {
+                XCTAssertTrue(controller.configuration.sites.contains(BlockingHostname(host)!), "Lost \(host) beside invalid \(invalidField)")
+            }
+            XCTAssertTrue(controller.nativeRecoveryNote.contains("could not be recovered"))
+            XCTAssertTrue(controller.error.isEmpty)
+            let policy = try BlockingPolicy(data: XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
+            XCTAssertTrue(policy.blocks(hostname: "valid-adult-extra.test", outgoing: true))
+            XCTAssertTrue(policy.blocks(hostname: "youtube.com", outgoing: true))
+            XCTAssertTrue(policy.blocks(hostname: nil, outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "ordinary-unlisted.test", outgoing: true))
+        }
     }
 
     @MainActor

@@ -26,27 +26,32 @@ struct BlockingFilterState: Sendable {
         return nil
     }
 
-    nonisolated func maintenanceRules(catalog: BlockingListCatalog) throws -> (BlockingConfiguration?, String) {
+    nonisolated func maintenanceRules(catalog: BlockingListCatalog) throws -> (BlockingConfiguration?, String, Bool) {
         // Size failures remain unavailable, rather than being mistaken for unknown/corrupt rules.
         if currentRulesPresent || payload != nil {
             if let payload { try BlockingConfiguration.validateProviderSize(payload) }
         } else if let legacyPayload, legacyPayload.count > 512 * 1024 {
             throw BlockingTransportError.configurationTooLarge
         }
-        do { return (try decodedRules(catalog: catalog), "") }
+        do { return (try decodedRules(catalog: catalog), "", false) }
         catch {
             // A present v2 always takes precedence, including malformed v2. Never read v1 here.
             if let payload, let additions = try? BlockingConfiguration.recoverProviderAdditions(payload) {
                 if additions.incomplete {
-                    return (additions.configuration, "Native filter rules required recovery. A raw settings copy was preserved; valid explicit websites and active inline additions were recovered, but some native-only additions could not be recovered. The prepared rules use the verified bundled lists; assisted maintenance can inspect the recovery copy.")
+                    return (additions.configuration, "Native filter rules required recovery. A raw settings copy was preserved; valid explicit websites and active inline additions were recovered, but some native-only additions could not be recovered. The prepared rules use the verified bundled lists; assisted maintenance can inspect the recovery copy.", true)
                 }
-                return (additions.configuration, "Native filter rules required recovery. A raw settings copy was preserved; explicit websites and active inline additions were recovered. The prepared rules use the verified bundled lists.")
+                return (additions.configuration, "Native filter rules required recovery. A raw settings copy was preserved; explicit websites and active inline additions were recovered. The prepared rules use the verified bundled lists.", false)
             }
-            return (nil, "Native filter rules required recovery. A raw settings copy was preserved, but unknown native-only additions could not be recovered. The prepared rules use the verified baseline and known local rules; assisted maintenance can inspect the recovery copy.")
+            return (nil, "Native filter rules required recovery. A raw settings copy was preserved, but unknown native-only additions could not be recovered. The prepared rules use the verified baseline and known local rules; assisted maintenance can inspect the recovery copy.", true)
         }
     }
 
-    nonisolated func preserveNativeRecovery(beside url: URL) throws {
+    nonisolated func preserveNativeRecovery(beside url: URL, incomplete: Bool) throws {
+        try preserveNativeSnapshot(beside: url)
+        if incomplete { try Self.preserveIncompleteDisclosure(beside: url) }
+    }
+
+    nonisolated private func preserveNativeSnapshot(beside url: URL) throws {
         let data: Data
         if let nativeConfigurationData { data = nativeConfigurationData }
         else {
@@ -83,6 +88,36 @@ struct BlockingFilterState: Sendable {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
         // Publish complete private bytes exclusively, preserving any existing recovery copy.
         try FileManager.default.linkItem(at: temporary, to: recovery)
+    }
+
+    private static let disclosureData = Data(#"{"version":1,"incomplete":true}"#.utf8)
+    private static let disclosureNote = "Some native-only additions could not be recovered. A private copy of the previous native settings is preserved for assisted maintenance."
+
+    nonisolated private static func disclosureURL(beside url: URL) -> URL {
+        url.appendingPathExtension("native-recovery").appendingPathComponent("incomplete-recovery.json")
+    }
+
+    nonisolated private static func preserveIncompleteDisclosure(beside url: URL) throws {
+        let marker = disclosureURL(beside: url)
+        if FileManager.default.fileExists(atPath: marker.path) {
+            guard try Data(contentsOf: marker) == disclosureData else { throw CocoaError(.fileReadCorruptFile) }
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+            return
+        }
+        let temporary = marker.appendingPathExtension(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try disclosureData.write(to: temporary, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        try FileManager.default.linkItem(at: temporary, to: marker)
+    }
+
+    nonisolated static func incompleteRecoveryNote(beside url: URL) throws -> String {
+        do {
+            guard try Data(contentsOf: disclosureURL(beside: url)) == disclosureData else { throw CocoaError(.fileReadCorruptFile) }
+            return disclosureNote
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return ""
+        }
     }
 }
 
@@ -216,18 +251,20 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                     if FileManager.default.fileExists(atPath: url.path) {
                         previous.append(try BlockingConfiguration.load(from: url))
                     }
-                    let (native, warning) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
+                    let (native, warning, incomplete) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     if let native { previous.append(native) }
                     let rules = try CommittedBlockingRules(preserving: previous, catalog: Self.bundledListCatalog)
                     let payload = try rules.providerPayload()
-                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: url) }
+                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: url, incomplete: incomplete) }
+                    let note = try BlockingFilterState.incompleteRecoveryNote(beside: url)
                     try rules.save(to: url)
-                    return (rules, payload, warning)
+                    return (rules, payload, warning, note)
                 }.value
                 committed = loaded.0
                 payload = loaded.1
                 configuration = loaded.0.configuration
                 nativeRepairWarning = loaded.2
+                nativeRecoveryNote = loaded.3
                 error = loaded.2
                 loadError = ""
                 if !loaded.2.isEmpty && state.enabled && extensionBundled && !preview { ruleDelivery = .pending }
@@ -302,19 +339,21 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             do {
                 let state = preview || !extensionBundled ? BlockingFilterState(enabled: false, payload: nil) : try await preferences.load()
                 let value = try await Task.detached(priority: .userInitiated) {
-                    let (previous, warning) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
+                    let (previous, warning, incomplete) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     let merged = try previous.map { try committed.preserving($0) } ?? committed
                     let value = try merged.addingSite(host)
                     let payload = try value.providerPayload()
-                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL) }
+                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL, incomplete: incomplete) }
+                    let note = try BlockingFilterState.incompleteRecoveryNote(beside: rulesURL)
                     try value.save(to: rulesURL)
-                    return (value, payload, warning)
+                    return (value, payload, warning, note)
                 }.value
                 self.committed = value.0
                 payload = value.1
                 configuration = value.0.configuration
                 ruleDelivery = .pending
                 if !value.2.isEmpty { nativeRepairWarning = value.2 }
+                if !value.3.isEmpty { nativeRecoveryNote = value.3 }
                 error = ""
                 busy = false
                 refresh()
@@ -351,19 +390,21 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             do {
                 let state = try await preferences.load()
                 let value = try await Task.detached(priority: .userInitiated) {
-                    let (previous, warning) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
+                    let (previous, warning, incomplete) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     let value = try previous.map { try committed.preserving($0) } ?? committed
                     let payload = try value.providerPayload()
-                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL) }
+                    if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL, incomplete: incomplete) }
+                    let note = try BlockingFilterState.incompleteRecoveryNote(beside: rulesURL)
                     try value.save(to: rulesURL)
-                    return (value, payload, warning)
+                    return (value, payload, warning, note)
                 }.value
                 self.committed = value.0
                 payload = value.1
                 configuration = value.0.configuration
                 if !value.2.isEmpty { nativeRepairWarning = value.2 }
                 try await preferences.apply(value.1)
-                if !nativeRepairWarning.isEmpty { nativeRecoveryNote = "Protected rules were applied. " + nativeRepairWarning }
+                if !value.3.isEmpty { nativeRecoveryNote = value.3 }
+                else if !nativeRepairWarning.isEmpty { nativeRecoveryNote = "Protected rules were applied. " + nativeRepairWarning }
                 nativeRepairWarning = ""
                 error = ""
                 ruleDelivery = .current

@@ -300,9 +300,47 @@ private struct BlockingProviderConfiguration: Codable, Equatable {
     let strictUnknownDestinations: Bool
 }
 
+private struct RecoverableBlockingValue<Value: Decodable>: Decodable {
+    let value: Value?
+    init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
+}
+
+private struct RecoverableBlockingValues<Value: Decodable & Hashable>: Decodable {
+    let values: Set<Value>
+    let incomplete: Bool
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var values: Set<Value> = []
+        var incomplete = false
+        while !container.isAtEnd {
+            let item = try container.decode(RecoverableBlockingValue<Value>.self)
+            if let value = item.value { values.insert(value) }
+            else { incomplete = true }
+        }
+        self.values = values
+        self.incomplete = incomplete
+    }
+}
+
 private struct RecoverableBlockingListSource: Decodable {
     let value: BlockingListSource?
-    init(from decoder: Decoder) throws { value = try? BlockingListSource(from: decoder) }
+    let incomplete: Bool
+    private enum CodingKeys: String, CodingKey { case inline }
+    private enum InlineKeys: String, CodingKey { case hosts = "_0" }
+
+    init(from decoder: Decoder) throws {
+        if let source = try? BlockingListSource(from: decoder) {
+            value = source
+            incomplete = false
+        } else {
+            let container = try? decoder.container(keyedBy: CodingKeys.self)
+            let inline = try? container?.nestedContainer(keyedBy: InlineKeys.self, forKey: .inline)
+            let hosts = try? inline?.decode(RecoverableBlockingValues<BlockingHostname>.self, forKey: .hosts)
+            value = hosts.map { .inline($0.values) }
+            incomplete = true
+        }
+    }
 }
 
 private struct BlockingProviderRecoveryConfiguration: Decodable {
@@ -317,12 +355,24 @@ private struct BlockingProviderRecoveryConfiguration: Decodable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         version = try values.decode(Int.self, forKey: .version)
-        sites = try values.decode(Set<BlockingHostname>.self, forKey: .sites)
-        let categories = try? values.decode(Set<BlockingCategory>.self, forKey: .categories)
-        let sources = try? values.decode([BlockingCategory: RecoverableBlockingListSource].self, forKey: .sources)
-        self.categories = categories ?? []
-        self.sources = sources ?? [:]
-        incomplete = categories == nil || sources == nil
+        let sites = try? values.decode(RecoverableBlockingValues<BlockingHostname>.self, forKey: .sites)
+        let categories = try? values.decode(RecoverableBlockingValues<BlockingCategory>.self, forKey: .categories)
+        self.sites = sites?.values ?? []
+        self.categories = categories?.values ?? []
+        var incomplete = sites == nil || categories == nil || sites?.incomplete == true || categories?.incomplete == true
+        var sources: [BlockingCategory: RecoverableBlockingListSource] = [:]
+        if var pairs = try? values.nestedUnkeyedContainer(forKey: .sources) {
+            while !pairs.isAtEnd {
+                let category = try pairs.decode(RecoverableBlockingValue<BlockingCategory>.self).value
+                guard !pairs.isAtEnd else { incomplete = true; break }
+                let source = try pairs.decode(RecoverableBlockingListSource.self)
+                if let category, sources[category] == nil { sources[category] = source }
+                else { incomplete = true }
+                if source.incomplete { incomplete = true }
+            }
+        } else { incomplete = true }
+        self.sources = sources
+        self.incomplete = incomplete
     }
 }
 
