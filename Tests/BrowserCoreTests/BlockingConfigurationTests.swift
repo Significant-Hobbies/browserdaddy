@@ -2,6 +2,32 @@ import XCTest
 @testable import BrowserCore
 
 final class BlockingConfigurationTests: XCTestCase {
+    func testLegacyStrictRulesDoNotBlockUnidentifiedNetworkTraffic() throws {
+        var configuration = BlockingConfiguration()
+        configuration.strictUnknownDestinations = true
+        configuration.sites = [BlockingHostname("blocked.test")!]
+        let policy = try BlockingPolicy(data: configuration.providerData(), catalog: Self.catalog)
+        for hostname in [nil, "", "127.0.0.1", "::1", "192.168.1.1", "8.8.8.8", "example..com"] as [String?] {
+            XCTAssertFalse(configuration.blocks(hostname: hostname, outgoing: true), "\(String(describing: hostname))")
+            XCTAssertFalse(policy.blocks(hostname: hostname, outgoing: true), "\(String(describing: hostname))")
+        }
+        XCTAssertTrue(policy.blocks(hostname: "sub.blocked.test", outgoing: true))
+        XCTAssertTrue(policy.blocks(hostname: "youtube.com", outgoing: true))
+        XCTAssertFalse(policy.blocks(hostname: "ordinary.test", outgoing: true))
+    }
+
+    func testUnavailablePolicyKeepsBaselineWithoutBlockingTheInternet() {
+        let policies = [BlockingPolicy(), BlockingPolicy(committedProviderData: nil),
+            BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: Data("corrupt".utf8)])]
+        for policy in policies {
+            for hostname in [nil, "8.8.8.8", "127.0.0.1", "ordinary.test"] as [String?] {
+                XCTAssertFalse(policy.blocks(hostname: hostname, outgoing: true), "\(String(describing: hostname))")
+            }
+            XCTAssertTrue(policy.blocks(hostname: "sub.youtube.com", outgoing: true))
+            XCTAssertFalse(policy.blocks(hostname: "youtube.com.allowed.test", outgoing: true))
+        }
+    }
+
     func testWeakValidNativeV2CannotRemoveCommittedProtection() throws {
         let data = try BlockingConfiguration().providerData()
         let policy = BlockingPolicy(vendorConfiguration: [BlockingConfiguration.providerRulesKey: data], catalog: Self.catalog)
