@@ -163,7 +163,6 @@ public struct CommittedBlockingRules: Sendable, Equatable {
         }
         for previous in configurations {
             result.sites.formUnion(previous.sites)
-            // Inactive custom lists were never a blocking decision and must stay inactive.
             for category in previous.categories {
                 result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
             }
