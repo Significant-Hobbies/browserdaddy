@@ -4,13 +4,16 @@ import SaaSMakerUI
 /// Daddy series theme — same palette as StorageDaddy/PerformanceDaddy.
 enum BrowserTheme {
     static let palette: SMPalette = {
-        var palette = SMPalette.ink.brand(DaddyPalette.mint, foreground: .black)
+        var palette = SMPalette.ink.dark.brand(DaddyPalette.mint, foreground: .black)
         palette.background = DaddyPalette.canvas
         palette.surface = DaddyPalette.canvas
         palette.card = DaddyPalette.canvas
         palette.foreground = DaddyPalette.ink
         palette.mutedForeground = DaddyPalette.secondaryInk
         palette.hairline = DaddyPalette.secondaryInk.opacity(0.18)
+        palette.border = palette.hairline
+        palette.input = palette.hairline
+        palette.accent = DaddyPalette.mint.opacity(0.11)
         palette.success = DaddyPalette.mint
         palette.destructive = DaddyPalette.coral
         palette.warning = DaddyPalette.amber

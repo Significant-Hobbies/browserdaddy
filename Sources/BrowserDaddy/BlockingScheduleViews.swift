@@ -1,5 +1,6 @@
 import BrowserCore
 import SwiftUI
+import SaaSMakerUI
 
 /// Presentation only: the saved domain value remains ScheduledSiteBlock.
 struct BlockingScheduleGroup: Identifiable {
@@ -104,44 +105,46 @@ struct BlockingScheduleCard: View {
     let group: BlockingScheduleGroup
 
     var body: some View {
-        BlockingSettingsCard {
-            HStack(spacing: 12) {
-                Image(systemName: "calendar")
-                    .font(.title3)
-                    .frame(width: 40, height: 40)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
-                Text(group.hosts.joined(separator: " · "))
-                    .font(.headline).textSelection(.enabled)
-                Spacer(minLength: 12)
-                Label("Saved", systemImage: "lock").font(.caption).foregroundStyle(.secondary)
-            }
-            Divider().padding(.vertical, 4)
-            HStack(alignment: .top, spacing: 20) {
-                scheduleValue("FROM", value: BlockingScheduleGroup.time(group.window.startMinute))
-                scheduleValue("UNTIL", value: BlockingScheduleGroup.time(group.window.endMinute))
-                scheduleValue("REPEAT", value: group.repeatLabel)
-            }
-            .padding(.bottom, 5)
-            timeline
-            HStack {
-                Text("Midnight")
-                Spacer()
-                Text("Noon")
-                Spacer()
-                Text("Midnight")
-            }.font(.caption).foregroundStyle(.secondary)
-            Text("Blocked \(BlockingScheduleGroup.duration(group.blockedMinutes)) · \(group.availableLabel)")
-                .font(.callout).foregroundStyle(.secondary)
-            if group.continuesNextDay && group.window.endMinute != 0 {
-                Text("Ends the following day. The timeline shows the hours of a 24-hour clock; selected days start the block.")
-                    .font(.caption).foregroundStyle(.secondary)
+        SMCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "calendar")
+                        .font(.title3)
+                        .frame(width: 40, height: 40)
+                        .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 9))
+                    Text(group.hosts.joined(separator: " · "))
+                        .font(.headline).textSelection(.enabled)
+                    Spacer(minLength: 12)
+                    SMStatusPill("Saved", tone: .neutral).accessibilityLabel("Saved schedule")
+                }
+                Divider().padding(.vertical, 4)
+                HStack(alignment: .top, spacing: 20) {
+                    scheduleValue("FROM", value: BlockingScheduleGroup.time(group.window.startMinute))
+                    scheduleValue("UNTIL", value: BlockingScheduleGroup.time(group.window.endMinute))
+                    scheduleValue("REPEAT", value: group.repeatLabel)
+                }
+                .padding(.bottom, 5)
+                timeline
+                HStack {
+                    Text("Midnight")
+                    Spacer()
+                    Text("Noon")
+                    Spacer()
+                    Text("Midnight")
+                }.font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                Text("Blocked \(BlockingScheduleGroup.duration(group.blockedMinutes)) · \(group.availableLabel)")
+                    .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                if group.continuesNextDay && group.window.endMinute != 0 {
+                    Text("Ends the following day. The timeline shows the hours of a 24-hour clock; selected days start the block.")
+                        .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                }
             }
         }
     }
 
     private func scheduleValue(_ title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption2).tracking(1).foregroundStyle(.secondary)
+            Text(title).font(.caption2).tracking(1).foregroundStyle(BrowserTheme.palette.mutedForeground)
             Text(value).font(.system(size: 19, weight: .semibold)).monospacedDigit()
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -149,9 +152,9 @@ struct BlockingScheduleCard: View {
     private var timeline: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Rectangle().fill(Color.accentColor.opacity(0.12))
+                Rectangle().fill(BrowserTheme.palette.brand.opacity(0.12))
                 ForEach(group.blockedIntervals, id: \.lowerBound) { interval in
-                    Rectangle().fill(Color.accentColor)
+                    Rectangle().fill(BrowserTheme.palette.brand)
                         .frame(width: geometry.size.width * CGFloat(interval.count) / 1440)
                         .offset(x: geometry.size.width * CGFloat(interval.lowerBound) / 1440)
                 }
@@ -212,7 +215,7 @@ struct BlockingScheduleSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("New schedule").font(.title2.bold())
+                SMSectionHeader("New schedule", size: 24)
                 Spacer()
             }.padding(24)
             Divider()
@@ -223,7 +226,7 @@ struct BlockingScheduleSheet: View {
                         .accessibilityLabel("Scheduled website domain")
                         .accessibilityIdentifier("schedule-website")
                     Text("Enter a domain. Its subdomains are included.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
                 }
                 Section {
                     DatePicker("Block from", selection: $draft.start, displayedComponents: .hourAndMinute)
@@ -235,9 +238,9 @@ struct BlockingScheduleSheet: View {
                     if draft.startMinute != draft.endMinute {
                         let minutes = (draft.endMinute - draft.startMinute + 1440) % 1440
                         Text("\(BlockingScheduleGroup.duration(minutes)) blocked · \(BlockingScheduleGroup.duration(1440 - minutes)) available per window")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     }
-                    Text(draft.timeExplanation).font(.caption).foregroundStyle(.secondary)
+                    Text(draft.timeExplanation).font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
                 }
                 Section("Repeat") {
                     ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
@@ -251,34 +254,36 @@ struct BlockingScheduleSheet: View {
                 }
                 Section {
                     Text("Saved rules are locked. Ask in Codex chat to change or remove a schedule.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     if let message = draft.validationMessage {
-                        Text(message).font(.callout).foregroundStyle(.secondary)
+                        Text(message).font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     } else if alreadySaved {
-                        Text("This schedule is already saved.").font(.callout).foregroundStyle(.secondary)
+                        Text("This schedule is already saved.").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     }
                     if atLimit {
                         Text("The limit of \(ScheduledSiteBlock.maximumCount) saved schedules has been reached.")
-                            .font(.callout).foregroundStyle(.secondary)
+                            .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     }
-                    if let message = submission.error { Text(message).font(.callout).foregroundStyle(.red) }
+                    if let message = submission.error { Text(message).font(.callout).foregroundStyle(BrowserTheme.palette.destructive) }
                 }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+            .background(BrowserTheme.palette.background)
             .disabled(submission.isSaving)
             Divider()
             HStack {
                 if submission.isSaving {
                     ProgressView().controlSize(.small)
-                    Text("Saving schedule…").font(.callout).foregroundStyle(.secondary)
+                    Text("Saving schedule…").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(submission.isSaving)
                 Button("Add schedule", action: save)
+                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                    .opacity(canSave ? 1 : 0.4)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
                     .accessibilityLabel("Save new schedule")
@@ -286,10 +291,9 @@ struct BlockingScheduleSheet: View {
             }.padding(20)
         }
         .frame(minWidth: 500, idealWidth: 540, minHeight: 640, idealHeight: 700)
-        .background(Color.black)
-        .font(.body)
-        .foregroundStyle(.primary)
-        .buttonStyle(.automatic)
+        .background(BrowserTheme.palette.background)
+        .browserTheme(BrowserTheme.palette)
+        .buttonStyle(SMButtonStyle(.outline, size: .compact))
         .interactiveDismissDisabled(submission.isSaving)
         .onAppear { websiteFocused = true }
         .onChange(of: controller.configuration.scheduledSites) { _, _ in resolveSave() }

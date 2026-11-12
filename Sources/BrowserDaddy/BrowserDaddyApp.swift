@@ -380,145 +380,62 @@ struct RootView: View {
         return arguments.contains("--check-app-startup") ? .attention : .blocking
     }
 
+    private static let brandMark = DaddyResources.url(forResource: "BrowserDaddyIcon")
+        .flatMap(NSImage.init(contentsOf:)).map { Image(nsImage: $0) }
+
+    private var selection: Binding<String?> {
+        Binding(get: { workspace.rawValue }, set: { value in
+            if let value, let selected = Workspace(rawValue: value) { workspace = selected }
+        })
+    }
+
+    private var navigationSections: [SMNavSection] {
+        [("Live", [Workspace.attention, .tabs]),
+         ("Archive", [.dashboard, .history]),
+         ("Setup", [.router, .blocking, .permissions])].map { title, destinations in
+            SMNavSection(title, items: destinations.map {
+                SMNavItem($0.rawValue, id: $0.rawValue, systemImage: $0.icon)
+            })
+        }
+    }
+
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .modifier(WorkspaceTheme(native: workspace == .blocking))
-                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 240)
-        } detail: {
+        SMAppShell(brand: "BrowserDaddy", mark: Self.brandMark,
+                   sections: navigationSections, selection: selection) {
             VStack(spacing: 0) {
                 content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider()
+                Divider().overlay(BrowserTheme.palette.hairline)
                 if workspace == .blocking {
                     HStack {
                         Label("Filter does not save a visit log", systemImage: "lock")
                         Spacer()
                     }
-                    .font(.caption).foregroundStyle(.secondary).padding(10)
+                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk).padding(10)
                 } else {
                     statusBar
                 }
             }
-            .background(workspace == .blocking ? Color.black : BrowserTheme.fog)
-            .modifier(WorkspaceTheme(native: workspace == .blocking))
+            .buttonStyle(SMButtonStyle(.outline, size: .compact))
         }
-        .preferredColorScheme(.dark)
-        .toolbarBackground(Color.black, for: .windowToolbar)
+        .browserTheme(BrowserTheme.palette)
+        .toolbarBackground(BrowserTheme.palette.background, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
+        .toolbar {
+            if workspace != .blocking {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.runExtract()
+                    } label: {
+                        Label(model.extracting ? "Syncing…" : "Sync History", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                    .disabled(model.extracting)
+                }
+            }
+        }
         .sheet(isPresented: $model.showAbout) {
             about.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
         }
-    }
-
-    @ViewBuilder private var sidebar: some View {
-        if workspace == .blocking { nativeSidebar }
-        else { archiveSidebar }
-    }
-
-    private var nativeSidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
-                DaddyArtwork(brand: true).frame(width: 24, height: 24)
-                Text("BrowserDaddy").font(.headline)
-            }.padding(18)
-            List(selection: Binding<Workspace?>(get: { workspace }, set: { if let value = $0 { workspace = value } })) {
-                Section("Live") {
-                    nativeNavigationItem(.attention)
-                    nativeNavigationItem(.tabs)
-                }
-                Section("Archive") {
-                    nativeNavigationItem(.dashboard)
-                    nativeNavigationItem(.history)
-                }
-                Section("Setup") {
-                    nativeNavigationItem(.router)
-                    nativeNavigationItem(.blocking)
-                    nativeNavigationItem(.permissions)
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(Color.black)
-            VStack(alignment: .leading, spacing: 5) {
-                Label("Local by design", systemImage: "lock").font(.callout.weight(.semibold))
-                Text("Your rules stay on this Mac.").font(.caption).foregroundStyle(.secondary)
-            }.padding(18)
-        }
-        .background(Color.black)
-    }
-
-    private func nativeNavigationItem(_ item: Workspace) -> some View {
-        Label { Text(item.rawValue) } icon: {
-            Image(systemName: item.icon).foregroundStyle(.secondary)
-        }
-            .listItemTint(.preferred(.accentColor))
-            .tag(item)
-            .accessibilityIdentifier("workspace-\(item.rawValue)")
-    }
-
-    private var archiveSidebar: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 9) {
-                DaddyArtwork(brand: true).frame(width: 24, height: 24)
-                Text("browserdaddy")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                    .tracking(-0.6).lineLimit(1).minimumScaleFactor(0.8)
-            }.padding(.top, 20).padding(.bottom, 10)
-
-            Button { model.runExtract() } label: {
-                Label(model.extracting ? "Syncing…" : "Sync History",
-                      systemImage: "arrow.triangle.2.circlepath")
-                    .textCase(.lowercase)
-                    .frame(maxWidth: .infinity).frame(height: 28)
-            }
-            .buttonStyle(DaddyButtonStyle(prominent: true))
-            .disabled(model.extracting)
-
-            VStack(alignment: .leading, spacing: 5) {
-                navigationHeading("LIVE")
-                navigationItem(.attention)
-                navigationItem(.tabs)
-                navigationHeading("ARCHIVE").padding(.top, 9)
-                navigationItem(.dashboard)
-                navigationItem(.history)
-                navigationHeading("SETUP").padding(.top, 9)
-                navigationItem(.router)
-                navigationItem(.blocking)
-                navigationItem(.permissions)
-            }
-
-            Spacer(minLength: 12)
-        }
-        .padding(.horizontal, 15).padding(.bottom, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.black)
-    }
-
-    private func navigationHeading(_ title: String) -> some View {
-        Text(title).textCase(.lowercase)
-            .font(.custom(BrowserTheme.palette.displayFont, size: 10).weight(.semibold))
-            .tracking(1)
-            .foregroundStyle(BrowserTheme.secondaryInk)
-            .padding(.horizontal, 10).padding(.vertical, 4)
-    }
-
-    private func navigationItem(_ item: Workspace) -> some View {
-        Button { workspace = item } label: {
-            HStack {
-                Image(systemName: item.icon).frame(width: 20)
-                    .foregroundStyle(BrowserTheme.mintInk)
-                Text(item.rawValue).textCase(.lowercase)
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(workspace == item ? BrowserTheme.mintInk.opacity(0.11) : .clear,
-                    in: RoundedRectangle(cornerRadius: 7))
-        .accessibilityAddTraits(workspace == item ? .isSelected : [])
-        .accessibilityIdentifier("workspace-\(item.rawValue)")
     }
 
     @ViewBuilder private var content: some View {
@@ -586,17 +503,5 @@ struct RootView: View {
                 .buttonStyle(DaddyButtonStyle(prominent: true))
         }
         .padding(32).frame(width: 340).background(Color.black)
-    }
-}
-
-private struct WorkspaceTheme: ViewModifier {
-    let native: Bool
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if native {
-            content.font(.body).foregroundStyle(.primary).tint(Color.accentColor).buttonStyle(.automatic)
-        } else {
-            content.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
-        }
     }
 }
