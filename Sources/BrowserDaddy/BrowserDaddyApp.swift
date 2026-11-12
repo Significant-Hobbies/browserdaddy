@@ -164,8 +164,9 @@ private struct BrowserDaddyContent: View {
 
     var body: some View {
         Group {
-            if model.needsOnboarding { OnboardingView() }
-            else { RootView() }
+            if model.needsOnboarding {
+                OnboardingView().browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
+            } else { RootView() }
         }
         .environmentObject(model)
         .onAppear {
@@ -318,12 +319,11 @@ struct BrowserDaddyApp: App {
                     } description: {
                         Text("BrowserDaddy has not started collection. Check available disk space and access to your Application Support folder, then reopen the app. Your archive has not been deleted or replaced.")
                     }
+                    .browserTheme(BrowserTheme.palette)
                 }
             }
             .frame(minWidth: 920, minHeight: 620)
             .onAppear { BrowserStartupCheck.windowAppeared() }
-            .browserTheme(BrowserTheme.palette)
-            .buttonStyle(DaddyButtonStyle())
         }
         .defaultSize(width: 1240, height: 800)
         .windowStyle(.titleBar)
@@ -371,7 +371,7 @@ struct RootView: View {
 
     init() {
         _workspace = State(initialValue: CommandLine.arguments.contains("--preview-fixture")
-                           ? (CommandLine.arguments.contains("--preview-blocking") ? .blocking : .history) : .attention)
+                           ? (CommandLine.arguments.contains("--preview-blocking") ? .blocking : .history) : .blocking)
     }
 
     var body: some View {
@@ -381,18 +381,66 @@ struct RootView: View {
         } detail: {
             VStack(spacing: 0) {
                 content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider().overlay(BrowserTheme.divider)
-                statusBar
+                Divider()
+                if workspace == .blocking {
+                    HStack {
+                        Label("Filter does not save a visit log", systemImage: "lock")
+                        Spacer()
+                    }
+                    .font(.caption).foregroundStyle(.secondary).padding(10)
+                } else {
+                    statusBar
+                }
             }
-            .background(BrowserTheme.fog)
+            .background(workspace == .blocking ? Color(nsColor: .windowBackgroundColor) : BrowserTheme.fog)
         }
-        .preferredColorScheme(.dark)
-        .tint(BrowserTheme.action)
-        .buttonStyle(DaddyButtonStyle())
-        .sheet(isPresented: $model.showAbout) { about }
+        .modifier(WorkspaceTheme(native: workspace == .blocking))
+        .sheet(isPresented: $model.showAbout) {
+            about.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
+        }
     }
 
-    private var sidebar: some View {
+    @ViewBuilder private var sidebar: some View {
+        if workspace == .blocking { nativeSidebar }
+        else { archiveSidebar }
+    }
+
+    private var nativeSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                DaddyArtwork(brand: true).frame(width: 24, height: 24)
+                Text("BrowserDaddy").font(.headline)
+            }.padding(18)
+            List(selection: Binding<Workspace?>(get: { workspace }, set: { if let value = $0 { workspace = value } })) {
+                Section("Live") {
+                    nativeNavigationItem(.attention)
+                    nativeNavigationItem(.tabs)
+                }
+                Section("Archive") {
+                    nativeNavigationItem(.dashboard)
+                    nativeNavigationItem(.history)
+                }
+                Section("Setup") {
+                    nativeNavigationItem(.router)
+                    nativeNavigationItem(.blocking)
+                    nativeNavigationItem(.permissions)
+                }
+            }
+            .listStyle(.sidebar)
+            VStack(alignment: .leading, spacing: 5) {
+                Label("Local by design", systemImage: "lock").font(.callout.weight(.semibold))
+                Text("Your rules stay on this Mac.").font(.caption).foregroundStyle(.secondary)
+            }.padding(18)
+        }
+    }
+
+    private func nativeNavigationItem(_ item: Workspace) -> some View {
+        Label(item.rawValue, systemImage: item.icon)
+            .tag(item)
+            .accessibilityIdentifier("workspace-\(item.rawValue)")
+    }
+
+    private var archiveSidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 9) {
                 DaddyArtwork(brand: true).frame(width: 24, height: 24)
@@ -522,5 +570,17 @@ struct RootView: View {
                 .buttonStyle(DaddyButtonStyle(prominent: true))
         }
         .padding(32).frame(width: 340).background(Color.black)
+    }
+}
+
+private struct WorkspaceTheme: ViewModifier {
+    let native: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if native {
+            content.font(.body).foregroundStyle(.primary).tint(Color.accentColor).buttonStyle(.automatic)
+        } else {
+            content.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
+        }
     }
 }
