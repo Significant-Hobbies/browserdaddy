@@ -402,7 +402,7 @@ struct RootView: View {
             .background(workspace == .blocking ? Color(nsColor: .windowBackgroundColor) : BrowserTheme.fog)
             .modifier(WorkspaceTheme(native: workspace == .blocking))
         }
-        .preferredColorScheme(workspace == .blocking ? nil : .dark)
+        .preferredColorScheme(.dark)
         .sheet(isPresented: $model.showAbout) {
             about.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
         }
