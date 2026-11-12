@@ -15,6 +15,16 @@ final class MenuLifecycleTests: XCTestCase {
         return (AppModel(store: store, startCollection: {}), directory)
     }
 
+    func testReopeningVisibleWindowRestoresRegularAppPresentation() {
+        let app = NSApplication.shared
+        let previous = app.activationPolicy()
+        defer { app.setActivationPolicy(previous) }
+        XCTAssertTrue(app.setActivationPolicy(.accessory))
+        let delegate = BrowserDaddyAppDelegate()
+        XCTAssertTrue(delegate.applicationShouldHandleReopen(app, hasVisibleWindows: true))
+        XCTAssertEqual(app.activationPolicy(), .regular)
+    }
+
     func testClosingLastWindowKeepsRoutingAndCollectionAlive() {
         let delegate = BrowserDaddyAppDelegate()
         XCTAssertFalse(delegate.applicationShouldTerminateAfterLastWindowClosed(.shared))
