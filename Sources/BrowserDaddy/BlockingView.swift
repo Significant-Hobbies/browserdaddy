@@ -31,7 +31,16 @@ struct BlockingView: View {
                     Text("The limit of \(ScheduledSiteBlock.maximumCount) saved schedules has been reached.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                if scheduleGroups.isEmpty {
+                if !controller.ready {
+                    BlockingSettingsCard {
+                        Text(controller.loadError.isEmpty ? "Loading schedules…" : "Schedules could not load")
+                            .font(.headline)
+                        Text(controller.loadError.isEmpty
+                             ? "Your saved schedules will appear when loading completes."
+                             : "Saved data is preserved. Use Refresh status to retry.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else if scheduleGroups.isEmpty {
                     BlockingSettingsCard {
                         Label("No scheduled blocks", systemImage: "calendar")
                             .font(.headline)
@@ -102,14 +111,7 @@ struct BlockingView: View {
                     Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") { controller.enable() }
                         .disabled(controller.busy || !controller.ready)
                 }
-                Menu {
-                    Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .accessibilityLabel("Filter actions")
+                Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
             }
             if !controller.extensionBundled {
                 Text("Rules are saved locally. This build needs the signed network filter before it can block connections.")
