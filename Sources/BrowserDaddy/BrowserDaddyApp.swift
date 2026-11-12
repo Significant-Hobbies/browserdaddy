@@ -165,7 +165,7 @@ private struct BrowserDaddyContent: View {
     var body: some View {
         Group {
             if model.needsOnboarding {
-                OnboardingView().browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
+                OnboardingView().browserTheme(BrowserTheme.palette).buttonStyle(SMButtonStyle(.outline, size: .compact))
             } else { RootView() }
         }
         .environmentObject(model)
@@ -304,7 +304,7 @@ struct BrowserDaddyApp: App {
             }
             .padding(24).frame(width: 480)
             .browserTheme(BrowserTheme.palette)
-            .buttonStyle(DaddyButtonStyle())
+            .buttonStyle(SMButtonStyle(.outline, size: .compact))
         }
     }
 
@@ -400,41 +400,44 @@ struct RootView: View {
     }
 
     var body: some View {
-        SMAppShell(brand: "BrowserDaddy", mark: Self.brandMark,
-                   sections: navigationSections, selection: selection) {
-            VStack(spacing: 0) {
-                content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider().overlay(BrowserTheme.palette.hairline)
-                if workspace == .blocking {
-                    HStack {
-                        Label("Filter does not save a visit log", systemImage: "lock")
-                        Spacer()
+        GeometryReader { geometry in
+            SMAppShell(brand: "BrowserDaddy", mark: Self.brandMark,
+                       sections: navigationSections, selection: selection) {
+                VStack(spacing: 0) {
+                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Divider().overlay(BrowserTheme.palette.hairline)
+                    if workspace == .blocking {
+                        HStack {
+                            Label("Filter does not save a visit log", systemImage: "lock")
+                            Spacer()
+                        }
+                        .font(.caption).foregroundStyle(BrowserTheme.secondaryInk).padding(10)
+                    } else {
+                        statusBar
                     }
-                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk).padding(10)
-                } else {
-                    statusBar
+                }
+                .buttonStyle(SMButtonStyle(.outline, size: .compact))
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .browserTheme(BrowserTheme.palette)
+            .toolbarBackground(BrowserTheme.palette.background, for: .windowToolbar)
+            .toolbarBackground(.visible, for: .windowToolbar)
+            .toolbar {
+                if workspace != .blocking {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            model.runExtract()
+                        } label: {
+                            Label(model.extracting ? "Syncing…" : "Sync History", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                        .disabled(model.extracting)
+                    }
                 }
             }
-            .buttonStyle(SMButtonStyle(.outline, size: .compact))
-        }
-        .browserTheme(BrowserTheme.palette)
-        .toolbarBackground(BrowserTheme.palette.background, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
-        .toolbar {
-            if workspace != .blocking {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.runExtract()
-                    } label: {
-                        Label(model.extracting ? "Syncing…" : "Sync History", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(SMButtonStyle(.outline, size: .compact))
-                    .disabled(model.extracting)
-                }
+            .sheet(isPresented: $model.showAbout) {
+                about.browserTheme(BrowserTheme.palette).buttonStyle(SMButtonStyle(.outline, size: .compact))
             }
-        }
-        .sheet(isPresented: $model.showAbout) {
-            about.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
         }
     }
 
@@ -500,7 +503,7 @@ struct RootView: View {
             Text("Your archive stays on this Mac. Optional topic tagging sends selected browsing text to classifier.dev with your consent.")
                 .font(.callout).foregroundStyle(BrowserTheme.mintInk)
             Button("Done") { model.showAbout = false }.textCase(.lowercase)
-                .buttonStyle(DaddyButtonStyle(prominent: true))
+                .buttonStyle(SMButtonStyle(.brand, size: .compact))
         }
         .padding(32).frame(width: 340).background(Color.black)
     }

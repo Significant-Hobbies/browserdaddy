@@ -1,3 +1,4 @@
+import SaaSMakerUI
 import AppKit
 import SwiftUI
 import BrowserCore
@@ -8,6 +9,7 @@ struct PermissionsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                BrowserPageHeader(title: "Permissions", subtitle: "Choose what BrowserDaddy can read and collect.", icon: "lock.shield")
                 access
                 automation
                 collection
@@ -16,7 +18,7 @@ struct PermissionsView: View {
                 data
             }
             .padding(28)
-            .frame(maxWidth: 900)
+            .frame(maxWidth: 1_040)
             .frame(maxWidth: .infinity)
         }
         .onAppear { model.refreshPermissions() }
@@ -135,7 +137,7 @@ struct PermissionsView: View {
                     Button(model.extracting ? "Syncing…" : "Sync history now") {
                         model.runExtract()
                     }.textCase(.lowercase)
-                    .buttonStyle(DaddyButtonStyle(prominent: true))
+                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
                     .disabled(model.extracting)
                     if model.extracting { ProgressView().controlSize(.small) }
                 }
@@ -173,7 +175,7 @@ struct PermissionsView: View {
                         model.runClassification()
                     }.textCase(.lowercase)
                     .disabled(model.classifying || !model.classifyOptin)
-                    .buttonStyle(DaddyButtonStyle(prominent: true))
+                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
                     if model.classifying {
                         ProgressView().controlSize(.small)
                     }

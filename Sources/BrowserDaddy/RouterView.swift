@@ -1,3 +1,4 @@
+import SaaSMakerUI
 import AppKit
 import BrowserCore
 import SwiftUI
@@ -17,14 +18,16 @@ struct RouterView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
+                BrowserPageHeader(title: "Link routing", subtitle: "Send each link to the browser where it belongs.", icon: "arrow.triangle.branch")
                 routeBand
                 rulesBand
                 fallbackBand
                 targetsBand
                 actionsBand
             }
-            .padding(24)
-            .frame(maxWidth: 860, alignment: .leading)
+            .padding(28)
+            .frame(maxWidth: 1_040, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.fog)
         .onAppear { refreshDefaultHandlers() }
@@ -66,7 +69,7 @@ struct RouterView: View {
                                 changingDefault = false
                             }
                         }.textCase(.lowercase)
-                        .buttonStyle(DaddyButtonStyle(prominent: true))
+                        .buttonStyle(SMButtonStyle(.brand, size: .compact))
                         .disabled(changingDefault)
                     }
                 }

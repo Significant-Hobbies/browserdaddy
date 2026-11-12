@@ -161,7 +161,7 @@ struct BlockingScheduleCard: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 4))
         }
-        .frame(height: 12)
+        .frame(height: 8)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("24-hour schedule. Blocked from \(BlockingScheduleGroup.time(group.window.startMinute)) until \(BlockingScheduleGroup.time(group.window.endMinute))\(group.continuesNextDay ? " the following day" : "").")
     }
@@ -215,7 +215,7 @@ struct BlockingScheduleSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                SMSectionHeader("New schedule", size: 24)
+                SMSectionHeader("New schedule", size: 22)
                 Spacer()
             }.padding(24)
             Divider()
@@ -243,14 +243,17 @@ struct BlockingScheduleSheet: View {
                     Text(draft.timeExplanation).font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
                 }
                 Section("Repeat") {
-                    ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
-                        Toggle(Calendar.current.weekdaySymbols[day - 1], isOn: Binding(
-                            get: { draft.weekdays.contains(day) },
-                            set: { if $0 { draft.weekdays.insert(day) } else { draft.weekdays.remove(day) } }))
-                            .toggleStyle(.checkbox)
-                            .accessibilityLabel("Repeat on \(Calendar.current.weekdaySymbols[day - 1])")
-                            .accessibilityIdentifier("schedule-day-\(day)")
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), alignment: .leading)], alignment: .leading, spacing: 14) {
+                        ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
+                            Toggle(Calendar.current.weekdaySymbols[day - 1], isOn: Binding(
+                                get: { draft.weekdays.contains(day) },
+                                set: { if $0 { draft.weekdays.insert(day) } else { draft.weekdays.remove(day) } }))
+                                .toggleStyle(.checkbox)
+                                .accessibilityLabel("Repeat on \(Calendar.current.weekdaySymbols[day - 1])")
+                                .accessibilityIdentifier("schedule-day-\(day)")
+                        }
                     }
+                    .padding(.vertical, 4)
                 }
                 Section {
                     Text("Saved rules are locked. Ask in Codex chat to change or remove a schedule.")
@@ -290,7 +293,7 @@ struct BlockingScheduleSheet: View {
                     .accessibilityIdentifier("schedule-save")
             }.padding(20)
         }
-        .frame(minWidth: 500, idealWidth: 540, minHeight: 640, idealHeight: 700)
+        .frame(minWidth: 540, idealWidth: 580, minHeight: 620, idealHeight: 680)
         .background(BrowserTheme.palette.background)
         .browserTheme(BrowserTheme.palette)
         .buttonStyle(SMButtonStyle(.outline, size: .compact))

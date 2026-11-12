@@ -44,16 +44,11 @@ struct TabsView: View {
                 toolbarControls
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 16)
+        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 18)
     }
 
     private var toolbarTitle: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            SMSectionHeader("Open tabs", size: 22)
-            Text(tabSummary)
-                .font(.caption)
-                .foregroundStyle(BrowserTheme.secondaryInk)
-        }
+        BrowserPageHeader(title: "Open tabs", subtitle: tabSummary, icon: "rectangle.on.rectangle")
     }
 
     private var tabSummary: String {
@@ -96,7 +91,7 @@ struct TabsView: View {
                     model.tabSelection = []
                 }
                 .textCase(.lowercase)
-                .buttonStyle(DaddyButtonStyle(prominent: true))
+                .buttonStyle(SMButtonStyle(.brand, size: .compact))
             }
             if model.tabsRefreshing {
                 ProgressView().controlSize(.small)
@@ -194,6 +189,7 @@ struct TabsView: View {
                         Spacer()
                     }
                     .padding(.vertical, 4)
+                    .background(BrowserTheme.fog)
                     .help("Drop a tab here to move it to \(group.kind.displayName)")
                     .dropDestination(for: BrowserTab.self) { items, _ in
                         guard let tab = items.first,
@@ -204,7 +200,7 @@ struct TabsView: View {
                 }
             }
         }
-        .listStyle(.inset)
+        .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }
 
