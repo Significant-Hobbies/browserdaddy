@@ -14,8 +14,13 @@ import Foundation
             guard let window = NSApplication.shared.windows.first(where: {
                 $0.isVisible && $0.contentView != nil && $0.title == "browserdaddy"
             }) else { exit(EXIT_FAILURE) }
+            guard window.styleMask.contains(.titled), window.titleVisibility == .visible else {
+                FileHandle.standardError.write(Data("BrowserDaddy window title bar missing\n".utf8))
+                exit(EXIT_FAILURE)
+            }
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+            FileHandle.standardOutput.write(Data("BrowserDaddy window title bar verified\n".utf8))
             FileHandle.standardOutput.write(Data("BrowserDaddy app startup verified\n".utf8))
             exit(EXIT_SUCCESS)
         }

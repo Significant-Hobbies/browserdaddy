@@ -35,10 +35,14 @@ final class BrowserDaddyAppDelegate: NSObject, NSApplicationDelegate {
     /// features — but a Dock/⌘-tab click must rebuild the main window.
     func applicationShouldHandleReopen(_ sender: NSApplication,
                                        hasVisibleWindows flag: Bool) -> Bool {
-        if flag { return true }
+        if flag {
+            sender.setActivationPolicy(.regular)
+            return true
+        }
         if LinkRouterService.shared.recentlyHandledURLEvent { return false }
         guard let open = WindowReopener.shared.openWindow else { return true }
         LinkRouterService.shared.markUserOpenedUI()
+        sender.setActivationPolicy(.regular)
         open(id: "main")
         sender.activate()
         return false
@@ -322,7 +326,7 @@ struct BrowserDaddyApp: App {
             .buttonStyle(DaddyButtonStyle())
         }
         .defaultSize(width: 1240, height: 800)
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About browserdaddy") { startup.model?.showAbout = true }
@@ -385,7 +389,6 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .tint(BrowserTheme.action)
         .buttonStyle(DaddyButtonStyle())
-        .toolbar(.hidden, for: .windowToolbar)
         .sheet(isPresented: $model.showAbout) { about }
     }
 
