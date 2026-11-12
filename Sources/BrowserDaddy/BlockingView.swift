@@ -6,10 +6,7 @@ struct BlockingView: View {
     @StateObject private var controller: BlockingController
     @StateObject private var protectionCheck: ProtectionCheckModel
     @State private var site = ""
-    @State private var scheduledSite = ""
-    @State private var scheduledDays: Set<Int> = Set(1...7)
-    @State private var scheduleStart = Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: 10))!
-    @State private var scheduleEnd = Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: 0))!
+    @State private var showingSchedule = false
 
     init(controller: BlockingController = .shared, protectionCheck: ProtectionCheckModel = ProtectionCheckModel()) {
         _controller = StateObject(wrappedValue: controller)
@@ -18,95 +15,63 @@ struct BlockingView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 18) {
-                BrowserBand(label: "BLOCKING", subtitle: "One set of rules, including private windows") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label(controller.status, systemImage: controller.enabled ? "shield.lefthalf.filled" : "shield")
+            VStack(alignment: .leading, spacing: 24) {
+                filterStatus
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Schedules").font(.largeTitle.bold())
+                        Text("Decide when a website gets your attention.").foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 16)
+                    Button("Add schedule") { showingSchedule = true }
+                        .disabled(!controller.ready || controller.busy || scheduleLimitReached)
+                        .accessibilityIdentifier("add-schedule")
+                }
+                if scheduleLimitReached {
+                    Text("The limit of \(ScheduledSiteBlock.maximumCount) saved schedules has been reached.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                if !controller.ready {
+                    BlockingSettingsCard {
+                        Text(controller.loadError.isEmpty ? "Loading schedules…" : "Schedules could not load")
                             .font(.headline)
-                        if controller.extensionBundled {
-                            HStack {
-                                Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") {
-                                    controller.enable()
-                                }.disabled(controller.busy || !controller.ready)
-                                Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
-                            }
-                        }
-                        Text(controller.extensionBundled
-                             ? "macOS will ask you to approve the system extension and network filter. Protection is committed in this app. You can add blocked websites; changes to protected settings require deliberate maintenance requested through Codex chat. If new rules cannot load, the running filter keeps its last valid rules. If the filter restarts without valid rules, only its built-in website rules are available until valid rules load."
-                             : "Your rules are saved locally. This build needs the signed BrowserDaddy network-filter extension before it can block connections.")
-                            .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
-                        if !controller.error.isEmpty {
-                            Text(controller.error).font(.callout).foregroundStyle(BrowserTheme.coral)
-                        }
-                        if !controller.loadError.isEmpty && controller.loadError != controller.error {
-                            Text(controller.loadError).font(.callout).foregroundStyle(BrowserTheme.coral)
-                        }
-                        if !controller.nativeRepairWarning.isEmpty && controller.nativeRepairWarning != controller.error {
-                            Text(controller.nativeRepairWarning).font(.callout).foregroundStyle(BrowserTheme.coral)
-                        }
-                        if !controller.nativeRecoveryNote.isEmpty {
-                            Text(controller.nativeRecoveryNote).font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                        Text(controller.loadError.isEmpty
+                             ? "Your saved schedules will appear when loading completes."
+                             : "Saved data is preserved. Use Refresh status to retry.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else if scheduleGroups.isEmpty {
+                    BlockingSettingsCard {
+                        Label("No scheduled blocks", systemImage: "calendar")
+                            .font(.headline)
+                        Text("Add a website and choose the hours and days to block it.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    VStack(spacing: 16) {
+                        ForEach(scheduleGroups) { group in
+                            BlockingScheduleCard(group: group)
                         }
                     }
                 }
-                protectionCheckBand
-                BrowserBand(label: "CATEGORIES", subtitle: "Block known domains using offline lists") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(BlockingCategory.allCases, id: \.self) { category in
-                            HStack {
-                                Label(category.title, systemImage: "checkmark.shield.fill")
-                                Spacer()
-                                Text("\((controller.configuration.lists[category]?.count ?? 0).formatted()) domains")
-                                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                            }
-                        }
-                        Text("Bundled lists: ShadowWhisperer/BlockLists · bundled snapshot d2f4083 · Unlicense. Both complete lists are protected, stay on this Mac and do not update automatically.")
-                            .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                    }
+                alwaysBlocked
+                Label("Saved rules are locked. Ask in Codex chat to change or remove one.", systemImage: "lock")
+                    .font(.callout).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 16) {
+                    DisclosureGroup("Check protection") { protectionCheckBand.padding(.top, 12) }
+                    DisclosureGroup("Coverage, privacy & list sources") { coverageDetails.padding(.top, 12) }
                 }
-                .disabled(!controller.ready || controller.busy)
-                BrowserBand(label: "DOMAIN PROTECTION", subtitle: "Local rules · normal networking stays available") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("Connections to identified blocked domains are stopped", systemImage: "checkmark.shield.fill")
-                        Text("The filter checks domain names supplied by macOS without inspecting page content or looking up categories online. Connections without an identifiable domain, including IP-only and local app connections, pass through. Protected settings require assisted maintenance through Codex chat. Existing connections may continue until closed.")
-                            .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
-                    }
-                }.disabled(!controller.ready || controller.busy)
-                BrowserBand(label: "SITES", subtitle: "A domain rule also blocks its subdomains") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            TextField("example.com", text: $site).textFieldStyle(.roundedBorder)
-                                .onSubmit { addSite() }
-                            Button("Add website") { addSite() }.disabled(site.isEmpty)
-                        }
-                        ForEach(controller.configuration.sites.sorted(by: { $0.value < $1.value }), id: \.self) { host in
-                            HStack {
-                                Text(host.value).font(.callout.monospaced())
-                                Spacer()
-                            }
-                        }
-                        if controller.configuration.sites.isEmpty {
-                            Text("Add any other websites you want blocked.")
-                                .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                        }
-                    }
-                }
-                .disabled(!controller.ready || controller.busy)
-                scheduledBlocksBand
-                BrowserBand(label: "COVERAGE & PRIVACY", subtitle: "Rules are not a guarantee of complete protection") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("The filter applies to identifiable connections in regular and private windows, and other apps. It does not save visited domains, URLs or a blocked-visit log.")
-                        Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Unidentified destinations are allowed so ordinary networking keeps working. Encrypted DNS, browser networking, VPNs and connection reuse can limit coverage.")
-                        Text("A device administrator can disable or remove the system extension through macOS or Recovery. BrowserDaddy does not change those operating-system controls.")
-                        Text("Cross-browser protection has not been verified on this Mac. Saved rule changes are sent to macOS when the filter is configured. Delivery and enforcement require runtime verification; existing connections may continue until closed.")
-                    }.font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
-                }
+                .font(.callout)
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .padding(28)
+            .frame(maxWidth: 860, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(BrowserTheme.fog)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .font(.body)
+        .foregroundStyle(.primary)
+        .buttonStyle(.automatic)
+        .sheet(isPresented: $showingSchedule) { BlockingScheduleSheet(controller: controller) }
         .onAppear { protectionCheck.startObservingNetwork() }
         .onDisappear { protectionCheck.stopObservingNetwork() }
         .onChange(of: controller.configuration) { _, _ in protectionCheck.invalidate() }
@@ -127,98 +92,132 @@ struct BlockingView: View {
         }
     }
 
-    private var scheduleDraft: ScheduledSiteBlock? {
-        guard let host = BlockingHostname(scheduledSite.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-        let calendar = Calendar.current
-        return ScheduledSiteBlock(hostname: host, weekdays: scheduledDays,
-            startMinute: calendar.component(.hour, from: scheduleStart) * 60 + calendar.component(.minute, from: scheduleStart),
-            endMinute: calendar.component(.hour, from: scheduleEnd) * 60 + calendar.component(.minute, from: scheduleEnd))
+    private var scheduleLimitReached: Bool {
+        controller.configuration.scheduledSites.count >= ScheduledSiteBlock.maximumCount
     }
 
-    private var sortedSchedules: [ScheduledSiteBlock] {
-        controller.configuration.scheduledSites.sorted {
-            if $0.hostname.value != $1.hostname.value { return $0.hostname.value < $1.hostname.value }
-            if $0.weekdays != $1.weekdays { return $0.weekdays.sorted().lexicographicallyPrecedes($1.weekdays.sorted()) }
-            if $0.startMinute != $1.startMinute { return $0.startMinute < $1.startMinute }
-            return $0.endMinute < $1.endMinute
+    private var scheduleGroups: [BlockingScheduleGroup] {
+        BlockingScheduleGroup.grouping(controller.configuration.scheduledSites)
+    }
+
+    private var filterStatus: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled").foregroundStyle(.secondary)
+                Text(controller.status).font(.callout)
+                Spacer(minLength: 8)
+                if controller.busy { ProgressView().controlSize(.small) }
+                if controller.extensionBundled {
+                    Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") { controller.enable() }
+                        .disabled(controller.busy || !controller.ready)
+                }
+                Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
+            }
+            if !controller.extensionBundled {
+                Text("Rules are saved locally. This build needs the signed network filter before it can block connections.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(warnings, id: \.self) { warning in
+                Text(warning).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+            }
+            if !controller.nativeRecoveryNote.isEmpty {
+                Text(controller.nativeRecoveryNote).font(.callout).foregroundStyle(.secondary)
+            }
         }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private var scheduledBlocksBand: some View {
-        BrowserBand(label: "SCHEDULED BLOCKS", subtitle: "Other websites · this Mac’s local time") {
-            VStack(alignment: .leading, spacing: 12) {
-                TextField("example.com", text: $scheduledSite).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Scheduled website domain")
-                HStack(spacing: 8) {
-                    ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
-                        Toggle(Calendar.current.shortWeekdaySymbols[day - 1], isOn: Binding(
-                            get: { scheduledDays.contains(day) },
-                            set: { if $0 { scheduledDays.insert(day) } else { scheduledDays.remove(day) } }))
-                            .toggleStyle(.button)
-                            .accessibilityLabel(Calendar.current.weekdaySymbols[day - 1])
+    private var warnings: [String] {
+        var result: [String] = []
+        for value in [controller.error, controller.loadError, controller.nativeRepairWarning] where !value.isEmpty {
+            if !result.contains(value) { result.append(value) }
+        }
+        return result
+    }
+
+    private var alwaysBlocked: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ALWAYS BLOCKED").font(.caption.weight(.semibold)).tracking(1).foregroundStyle(.secondary)
+            BlockingSettingsCard {
+                VStack(spacing: 0) {
+                    ForEach(BlockingCategory.allCases.filter { controller.configuration.categories.contains($0) }, id: \.self) { category in
+                        permanentRow(category.title, detail: "All day")
+                        Divider().padding(.vertical, 10)
+                    }
+                    ForEach(controller.configuration.sites.sorted(by: { $0.value < $1.value }), id: \.self) { host in
+                        permanentRow(host.value, detail: "All day")
+                            .padding(.vertical, 6)
+                    }
+                    if !controller.ready {
+                        Text(controller.loadError.isEmpty
+                             ? "Loading saved rules…"
+                             : "Saved rules could not load. Use Refresh status to retry.")
+                            .font(.callout).foregroundStyle(.secondary)
                     }
                 }
+                Divider().padding(.vertical, 6)
                 HStack {
-                    DatePicker("From", selection: $scheduleStart, displayedComponents: .hourAndMinute)
-                    DatePicker("Until", selection: $scheduleEnd, displayedComponents: .hourAndMinute)
-                    Button("Add schedule") {
-                        if let schedule = scheduleDraft { _ = controller.addScheduledSite(schedule) }
-                    }.disabled(scheduleDraft == nil || controller.configuration.scheduledSites.count >= ScheduledSiteBlock.maximumCount)
+                    TextField("example.com", text: $site)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Always blocked website domain")
+                        .onSubmit { addSite() }
+                    Button("Add website") { addSite() }
+                        .disabled(BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
                 }
-                if let draft = scheduleDraft, draft.endMinute < draft.startMinute {
-                    Text("Ends the following day").font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                }
-                Text("Choose days and different start and end times. An end before the start continues into the next day. Includes subdomains; follows this Mac’s clock and time zone.")
-                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                ForEach(sortedSchedules, id: \.self) { schedule in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(schedule.hostname.value).font(.callout.monospaced())
-                        Text(scheduleDescription(schedule)).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                    }
-                }
-                if controller.configuration.scheduledSites.isEmpty {
-                    Text("No scheduled blocks added.").font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                }
-                Text("Protected categories, YouTube, Reddit and Instagram stay blocked at all times. Added schedules require assisted maintenance to change. After adding one, close and reopen existing tabs or connections so the filter can track them; active scheduled connections are checked every second. No visit log is saved.")
-                    .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
-            }
-        }
-        .disabled(!controller.ready || controller.busy)
-        .onChange(of: controller.configuration.scheduledSites) { _, schedules in
-            if let draft = scheduleDraft, schedules.contains(draft) {
-                scheduledSite = ""
+                .disabled(!controller.ready || controller.busy)
+                Text("A domain rule includes its subdomains.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    private func scheduleDescription(_ schedule: ScheduledSiteBlock) -> String {
-        let days = [2, 3, 4, 5, 6, 7, 1].filter { schedule.weekdays.contains($0) }
-            .map { Calendar.current.shortWeekdaySymbols[$0 - 1] }.joined(separator: ", ")
-        func time(_ minute: Int) -> String {
-            let date = Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: minute / 60, minute: minute % 60))!
-            return date.formatted(date: .omitted, time: .shortened)
+    private func permanentRow(_ title: String, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock").font(.caption).foregroundStyle(.secondary).frame(width: 16)
+            Text(title).textSelection(.enabled)
+            Spacer()
+            Text(detail).font(.callout).foregroundStyle(.secondary)
         }
-        return "\(days) · \(time(schedule.startMinute))–\(time(schedule.endMinute))\(schedule.endMinute < schedule.startMinute ? " next day" : "") · local time"
+    }
+
+    private var coverageDetails: some View {
+        BlockingSettingsCard {
+            Text("How domain protection works").font(.headline)
+            Text("The filter checks domain names supplied by macOS without inspecting page content or looking up categories online. Connections without an identifiable domain, including IP-only and local app connections, pass through. Existing connections may continue until closed.")
+            Text("The filter applies to identifiable connections in regular and private windows, and other apps. It does not save visited domains, URLs or a blocked-visit log.")
+            Text("Sites missing from the category lists, and adult content on shared sites, may remain accessible. Unidentified destinations are allowed so ordinary networking keeps working. Encrypted DNS, browser networking, VPNs and connection reuse can limit coverage.")
+            Text("A device administrator can disable or remove the system extension through macOS or Recovery. BrowserDaddy does not change those operating-system controls.")
+            Text("Cross-browser protection has not been verified on this Mac. Saved rule changes are sent to macOS when the filter is configured. Delivery and enforcement require runtime verification.")
+            Divider()
+            Text("Schedules follow this Mac’s local clock and time zone. Days identify the start of a window; overnight windows end the following day. After adding a rule, close and reopen existing tabs or connections so the filter can track them. Active scheduled connections are checked every second.")
+            Text("macOS will ask you to approve the system extension and network filter when enabling it. If new rules cannot load, the running filter keeps its last valid rules. If it restarts without valid rules, only its built-in website rules are available until valid rules load.")
+            Divider()
+            Text("Bundled lists: ShadowWhisperer/BlockLists · snapshot d2f4083 · Unlicense. Both complete lists stay on this Mac and do not update automatically.")
+            ForEach(BlockingCategory.allCases.filter { controller.configuration.categories.contains($0) }, id: \.self) { category in
+                Text("\(category.title): \((controller.configuration.lists[category]?.count ?? 0).formatted()) domains")
+            }
+        }
+        .foregroundStyle(.secondary)
     }
 
     private var protectionCheckBand: some View {
-        BrowserBand(label: "CHECK PROTECTION", subtitle: "Four samples from this app's network path") {
+        BlockingSettingsCard {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Only when you click Check protection, BrowserDaddy sends one HTTPS HEAD request to each destination below. These hosts receive your IP address and standard connection metadata. No browsing history is read or sent; responses are not saved.")
-                    .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                    .font(.callout).foregroundStyle(Color.secondary)
                 ForEach(ProtectionCheckTarget.allCases) { target in
                     HStack {
                         Text(target.rawValue).font(.callout.monospaced())
                         Text(target.isProtected ? "Protected sample" : "Allowed control")
-                            .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                            .font(.caption).foregroundStyle(Color.secondary)
                         Spacer()
                         Text(protectionCheck.observations[target]?.label ?? (protectionCheck.isRunning ? "Checking…" : "—"))
-                            .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                            .font(.caption).foregroundStyle(Color.secondary)
                     }
                 }
                 if controller.configuration.blocks(hostname: ProtectionCheckTarget.allowed.rawValue, outgoing: true) {
                     Text("Your rules block example.com. The allowed control will be inconclusive.")
-                        .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                        .font(.callout).foregroundStyle(Color.secondary)
                 }
                 HStack {
                     Button("Check protection") {
@@ -231,7 +230,7 @@ struct BlockingView: View {
                 }
                 protectionCheckResult
                 Text("A failed request never proves blocking. This checks BrowserDaddy only, not Chrome, private windows, other apps or all content. Results can change as rules, connections and networks change.")
-                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                    .font(.caption).foregroundStyle(Color.secondary)
             }
         }
     }
@@ -245,22 +244,22 @@ struct BlockingView: View {
         case .idle:
             if !canCheckProtection {
                 Text("Enable the bundled protected filter before checking.")
-                    .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                    .font(.callout).foregroundStyle(Color.secondary)
             }
         case .running:
             Text("Checking four destinations · up to 8 seconds")
-                .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                .font(.callout).foregroundStyle(Color.secondary)
         case .finished(let report):
             Text(report.summary).font(.callout)
-                .foregroundStyle(report.assessment == .protectedReachable ? BrowserTheme.coral : BrowserTheme.secondaryInk)
+                .foregroundStyle(report.assessment == .protectedReachable ? Color.red : Color.secondary)
             Text("Checked \(report.checkedAt.formatted(date: .abbreviated, time: .standard))")
-                .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                .font(.caption).foregroundStyle(Color.secondary)
         case .cancelled:
             Text("Check cancelled. No conclusion was recorded.")
-                .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                .font(.callout).foregroundStyle(Color.secondary)
         case .stale:
             Text("The previous check is stale. Run a new check for current observations.")
-                .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
+                .font(.callout).foregroundStyle(Color.secondary)
         }
     }
 
@@ -268,5 +267,17 @@ struct BlockingView: View {
         if let host = BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)), controller.configuration.sites.contains(host) {
             site = ""
         } else { _ = controller.addSite(site) }
+    }
+}
+
+struct BlockingSettingsCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) { content }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.10)))
     }
 }
