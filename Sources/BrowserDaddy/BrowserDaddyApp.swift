@@ -399,10 +399,12 @@ struct RootView: View {
                     statusBar
                 }
             }
-            .background(workspace == .blocking ? Color(nsColor: .windowBackgroundColor) : BrowserTheme.fog)
+            .background(workspace == .blocking ? Color.black : BrowserTheme.fog)
             .modifier(WorkspaceTheme(native: workspace == .blocking))
         }
         .preferredColorScheme(.dark)
+        .toolbarBackground(Color.black, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .sheet(isPresented: $model.showAbout) {
             about.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
         }
@@ -435,11 +437,14 @@ struct RootView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Color.black)
             VStack(alignment: .leading, spacing: 5) {
                 Label("Local by design", systemImage: "lock").font(.callout.weight(.semibold))
                 Text("Your rules stay on this Mac.").font(.caption).foregroundStyle(.secondary)
             }.padding(18)
         }
+        .background(Color.black)
     }
 
     private func nativeNavigationItem(_ item: Workspace) -> some View {

@@ -265,6 +265,8 @@ struct BlockingScheduleSheet: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(Color.black)
             .disabled(submission.isSaving)
             Divider()
             HStack {
@@ -284,7 +286,7 @@ struct BlockingScheduleSheet: View {
             }.padding(20)
         }
         .frame(minWidth: 500, idealWidth: 540, minHeight: 640, idealHeight: 700)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.black)
         .font(.body)
         .foregroundStyle(.primary)
         .buttonStyle(.automatic)
