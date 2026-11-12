@@ -101,4 +101,40 @@ final class BlockingSchedulePresentationTests: XCTestCase {
         XCTAssertNotNil(draft.schedule)
         XCTAssertNil(draft.validationMessage)
     }
+    @MainActor func testOrdinaryOpeningShowsBlockingButStartupChecksAvoidRealRules() {
+        XCTAssertEqual(RootView.initialWorkspace(arguments: []), .blocking)
+        XCTAssertEqual(RootView.initialWorkspace(arguments: ["--check-app-startup"]), .attention)
+        XCTAssertEqual(RootView.initialWorkspace(arguments: ["--preview-fixture"]), .history)
+        XCTAssertEqual(RootView.initialWorkspace(arguments: ["--preview-fixture", "--preview-blocking", "--check-app-startup"]), .blocking)
+    }
+
+    func testSaveWaitsForPersistedScheduleAndDoesNotDismissOnFailure() {
+        let requested = schedule("news.example")
+        var submission = BlockingScheduleSubmission.saving(requested)
+        XCTAssertFalse(submission.resolve(saved: [], busy: true, error: ""))
+        XCTAssertTrue(submission.isSaving)
+        XCTAssertTrue(submission.resolve(saved: [requested], busy: true, error: ""))
+        XCTAssertEqual(submission, .idle)
+        submission = .saving(requested)
+        XCTAssertFalse(submission.resolve(saved: [], busy: false, error: "Disk write failed"))
+        XCTAssertEqual(submission, .failed("Disk write failed"))
+        XCTAssertTrue(submission.canSubmit(requested, ready: true, busy: false, saved: []))
+        submission = .failed("Synchronous rejection")
+        XCTAssertFalse(submission.resolve(saved: [requested], busy: false, error: ""))
+        XCTAssertEqual(submission.error, "Synchronous rejection")
+    }
+
+    func testSaveGatingPreventsDuplicatesLimitAndConcurrentRequests() {
+        let requested = schedule("news.example")
+        let idle = BlockingScheduleSubmission.idle
+        XCTAssertTrue(idle.canSubmit(requested, ready: true, busy: false, saved: []))
+        XCTAssertFalse(idle.canSubmit(nil, ready: true, busy: false, saved: []))
+        XCTAssertFalse(idle.canSubmit(requested, ready: false, busy: false, saved: []))
+        XCTAssertFalse(idle.canSubmit(requested, ready: true, busy: true, saved: []))
+        XCTAssertFalse(idle.canSubmit(requested, ready: true, busy: false, saved: [requested]))
+        XCTAssertFalse(BlockingScheduleSubmission.saving(requested).canSubmit(requested, ready: true, busy: false, saved: []))
+        let full = Set((0..<ScheduledSiteBlock.maximumCount).map { schedule("site\($0).example") })
+        XCTAssertFalse(idle.canSubmit(requested, ready: true, busy: false, saved: full))
+    }
+
 }

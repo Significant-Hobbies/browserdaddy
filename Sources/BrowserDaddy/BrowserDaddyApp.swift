@@ -370,13 +370,20 @@ struct RootView: View {
     @State private var workspace: Workspace
 
     init() {
-        _workspace = State(initialValue: CommandLine.arguments.contains("--preview-fixture")
-                           ? (CommandLine.arguments.contains("--preview-blocking") ? .blocking : .history) : .blocking)
+        _workspace = State(initialValue: Self.initialWorkspace(arguments: CommandLine.arguments))
+    }
+
+    static func initialWorkspace(arguments: [String]) -> Workspace {
+        if arguments.contains("--preview-fixture") {
+            return arguments.contains("--preview-blocking") ? .blocking : .history
+        }
+        return arguments.contains("--check-app-startup") ? .attention : .blocking
     }
 
     var body: some View {
         NavigationSplitView {
             sidebar
+                .modifier(WorkspaceTheme(native: workspace == .blocking))
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 240)
         } detail: {
             VStack(spacing: 0) {
@@ -393,8 +400,9 @@ struct RootView: View {
                 }
             }
             .background(workspace == .blocking ? Color(nsColor: .windowBackgroundColor) : BrowserTheme.fog)
+            .modifier(WorkspaceTheme(native: workspace == .blocking))
         }
-        .modifier(WorkspaceTheme(native: workspace == .blocking))
+        .preferredColorScheme(workspace == .blocking ? nil : .dark)
         .sheet(isPresented: $model.showAbout) {
             about.browserTheme(BrowserTheme.palette).buttonStyle(DaddyButtonStyle())
         }
@@ -435,7 +443,10 @@ struct RootView: View {
     }
 
     private func nativeNavigationItem(_ item: Workspace) -> some View {
-        Label(item.rawValue, systemImage: item.icon)
+        Label { Text(item.rawValue) } icon: {
+            Image(systemName: item.icon).foregroundStyle(.secondary)
+        }
+            .listItemTint(.preferred(.accentColor))
             .tag(item)
             .accessibilityIdentifier("workspace-\(item.rawValue)")
     }

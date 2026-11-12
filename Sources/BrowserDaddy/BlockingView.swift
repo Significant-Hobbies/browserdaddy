@@ -98,11 +98,11 @@ struct BlockingView: View {
                 Text(controller.status).font(.callout)
                 Spacer(minLength: 8)
                 if controller.busy { ProgressView().controlSize(.small) }
+                if controller.extensionBundled {
+                    Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") { controller.enable() }
+                        .disabled(controller.busy || !controller.ready)
+                }
                 Menu {
-                    if controller.extensionBundled {
-                        Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") { controller.enable() }
-                            .disabled(controller.busy || !controller.ready)
-                    }
                     Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -148,7 +148,9 @@ struct BlockingView: View {
                             .padding(.vertical, 6)
                     }
                     if !controller.ready {
-                        Text("Saved rules are unavailable until loading completes.")
+                        Text(controller.loadError.isEmpty
+                             ? "Loading saved rules…"
+                             : "Saved rules could not load. Use Refresh status to retry.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }

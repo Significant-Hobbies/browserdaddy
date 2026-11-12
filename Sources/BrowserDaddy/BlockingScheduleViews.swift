@@ -164,18 +164,49 @@ struct BlockingScheduleCard: View {
     }
 }
 
+enum BlockingScheduleSubmission: Equatable {
+    case idle
+    case saving(ScheduledSiteBlock)
+    case failed(String)
+
+    var isSaving: Bool {
+        if case .saving = self { return true }
+        return false
+    }
+
+    var error: String? {
+        if case .failed(let message) = self { return message }
+        return nil
+    }
+
+    func canSubmit(_ schedule: ScheduledSiteBlock?, ready: Bool, busy: Bool, saved: Set<ScheduledSiteBlock>) -> Bool {
+        guard let schedule else { return false }
+        return ready && !busy && !isSaving && saved.count < ScheduledSiteBlock.maximumCount && !saved.contains(schedule)
+    }
+
+    mutating func resolve(saved: Set<ScheduledSiteBlock>, busy: Bool, error: String) -> Bool {
+        guard case .saving(let schedule) = self else { return false }
+        if saved.contains(schedule) {
+            self = .idle
+            return true
+        }
+        if !busy { self = .failed(error.isEmpty ? "The schedule was not saved. Your draft is ready to retry." : error) }
+        return false
+    }
+}
+
 struct BlockingScheduleSheet: View {
     @ObservedObject var controller: BlockingController
     @Environment(\.dismiss) private var dismiss
     @State private var draft = BlockingScheduleDraft()
-    @State private var pendingSchedule: ScheduledSiteBlock?
-    @State private var saveError = ""
+    @State private var submission = BlockingScheduleSubmission.idle
     @FocusState private var websiteFocused: Bool
 
     private var atLimit: Bool { controller.configuration.scheduledSites.count >= ScheduledSiteBlock.maximumCount }
     private var alreadySaved: Bool { draft.schedule.map { controller.configuration.scheduledSites.contains($0) } ?? false }
     private var canSave: Bool {
-        draft.schedule != nil && controller.ready && !controller.busy && pendingSchedule == nil && !atLimit && !alreadySaved
+        submission.canSubmit(draft.schedule, ready: controller.ready, busy: controller.busy,
+                             saved: controller.configuration.scheduledSites)
     }
 
     var body: some View {
@@ -230,21 +261,21 @@ struct BlockingScheduleSheet: View {
                         Text("The limit of \(ScheduledSiteBlock.maximumCount) saved schedules has been reached.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    if !saveError.isEmpty { Text(saveError).font(.callout).foregroundStyle(.red) }
+                    if let message = submission.error { Text(message).font(.callout).foregroundStyle(.red) }
                 }
             }
             .formStyle(.grouped)
-            .disabled(pendingSchedule != nil)
+            .disabled(submission.isSaving)
             Divider()
             HStack {
-                if pendingSchedule != nil {
+                if submission.isSaving {
                     ProgressView().controlSize(.small)
                     Text("Saving schedule…").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                    .disabled(pendingSchedule != nil)
+                    .disabled(submission.isSaving)
                 Button("Add schedule", action: save)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
@@ -257,7 +288,7 @@ struct BlockingScheduleSheet: View {
         .font(.body)
         .foregroundStyle(.primary)
         .buttonStyle(.automatic)
-        .interactiveDismissDisabled(pendingSchedule != nil)
+        .interactiveDismissDisabled(submission.isSaving)
         .onAppear { websiteFocused = true }
         .onChange(of: controller.configuration.scheduledSites) { _, _ in resolveSave() }
         .onChange(of: controller.busy) { _, busy in if !busy { resolveSave() } }
@@ -265,22 +296,18 @@ struct BlockingScheduleSheet: View {
 
     private func save() {
         guard canSave, let schedule = draft.schedule else { return }
-        saveError = ""
-        pendingSchedule = schedule
+        submission = .saving(schedule)
         if !controller.addScheduledSite(schedule) {
-            pendingSchedule = nil
-            saveError = controller.error.isEmpty ? "The schedule could not be saved. Refresh the filter status and try again." : controller.error
+            submission = .failed(controller.error.isEmpty
+                                 ? "The schedule could not be saved. Refresh the filter status and try again."
+                                 : controller.error)
         }
     }
 
     private func resolveSave() {
-        guard let pendingSchedule else { return }
-        if controller.configuration.scheduledSites.contains(pendingSchedule) {
-            self.pendingSchedule = nil
+        if submission.resolve(saved: controller.configuration.scheduledSites,
+                              busy: controller.busy, error: controller.error) {
             dismiss()
-        } else if !controller.busy {
-            self.pendingSchedule = nil
-            saveError = controller.error.isEmpty ? "The schedule was not saved. Your draft is ready to retry." : controller.error
         }
     }
 }
