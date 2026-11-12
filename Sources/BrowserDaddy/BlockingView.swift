@@ -67,7 +67,7 @@ struct BlockingView: View {
             .frame(maxWidth: 860, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.black)
         .font(.body)
         .foregroundStyle(.primary)
         .buttonStyle(.automatic)
@@ -125,7 +125,8 @@ struct BlockingView: View {
             }
         }
         .padding(12)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.black, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.10)))
     }
 
     private var warnings: [String] {
@@ -277,7 +278,7 @@ struct BlockingSettingsCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 12) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.10)))
     }
 }
