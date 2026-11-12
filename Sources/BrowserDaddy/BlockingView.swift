@@ -17,11 +17,12 @@ struct BlockingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                BrowserPageHeader(title: "Website blocking", subtitle: "Keep distractions out of every browser.", icon: "shield.lefthalf.filled")
                 filterStatus
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 5) {
-                        SMSectionHeader("Schedules", size: 30)
-                        Text("Decide when a website gets your attention.").foregroundStyle(BrowserTheme.palette.mutedForeground)
+                        SMSectionHeader("Schedules", size: 20)
+                        Text("Choose the hours a website stays out of reach.").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     }
                     Spacer(minLength: 16)
                     Button("Add schedule") { showingSchedule = true }
@@ -71,7 +72,7 @@ struct BlockingView: View {
                 .font(.callout)
             }
             .padding(28)
-            .frame(maxWidth: 860, alignment: .leading)
+            .frame(maxWidth: 1_040, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.palette.background)

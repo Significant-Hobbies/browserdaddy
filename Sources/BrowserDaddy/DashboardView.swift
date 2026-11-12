@@ -16,6 +16,7 @@ struct DashboardView: View {
         ScrollView {
             if let r = model.report, r.totalVisits > 0 {
                 VStack(spacing: 16) {
+                BrowserPageHeader(title: "Browsing archive", subtitle: "The patterns behind your regular browsing.", icon: "chart.bar.xaxis")
                     FilterBar()
                     verdict(r)
                     changedLately(r)
@@ -37,7 +38,7 @@ struct DashboardView: View {
                     searches(r)
                 }
                 .padding(28)
-                .frame(maxWidth: 1_080)
+                .frame(maxWidth: 1_040)
                 .frame(maxWidth: .infinity)
             } else {
                 emptyState
@@ -51,7 +52,7 @@ struct DashboardView: View {
         HStack(alignment: .top, spacing: 18) {
             DaddyArtwork(brand: true).frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 7) {
-                SMSectionHeader("\(r.totalVisits.formatted()) visits archived", size: 32)
+                SMSectionHeader("\(r.totalVisits.formatted()) visits archived", size: 26)
                     .accessibilityAddTraits(.isHeader)
                 Text("\(r.uniqueURLs.formatted()) unique URLs across "
                      + "\(r.uniqueDomains.formatted()) domains")
@@ -62,9 +63,9 @@ struct DashboardView: View {
             }
             Spacer()
         }
-        .padding(24)
-        .background(BrowserTheme.mint)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(20)
+        .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(BrowserTheme.divider))
     }
 
     private func rangeText(_ r: ReportEngine.Report) -> String {
@@ -704,7 +705,7 @@ struct DashboardView: View {
                     .foregroundStyle(BrowserTheme.mintInk)
             }
             VStack(spacing: 10) {
-                SMDisplay("No history archived yet", size: 32)
+                SMDisplay("No history archived yet", size: 26)
                 Text("BrowserDaddy reads browser history into a permanent local archive. "
                      + "Connect a browser folder in Permissions, then sync.")
                     .foregroundStyle(BrowserTheme.secondaryInk)
@@ -712,7 +713,7 @@ struct DashboardView: View {
             }
             Button(model.extracting ? "Syncing…" : "Sync History",
                    action: model.runExtract)
-                .buttonStyle(PrimaryActionButtonStyle())
+                .buttonStyle(SMButtonStyle(.brand, size: .compact))
                 .disabled(model.extracting)
             if let last = model.extractLog.last {
                 Text(last)

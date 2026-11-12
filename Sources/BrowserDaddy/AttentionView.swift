@@ -8,7 +8,7 @@ struct AttentionView: View {
 
     /// Why the URL line is empty: unreadable tab vs. frontmost app isn't a browser.
     private var nowSubtitle: String {
-        if model.nowApp.isEmpty { return "Waiting for the first poll" }
+        if model.nowApp.isEmpty { return model.watcher.isRunning ? "Waiting for the first poll" : "Start collection to measure your focused time." }
         if FocusWatcher.scriptableBrowsers.values.contains(model.nowApp) {
             return "Tab URL unavailable — app-level time still counts"
         }
@@ -24,6 +24,7 @@ struct AttentionView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                BrowserPageHeader(title: "Attention", subtitle: "Your focused time, measured as it happens.", icon: "eye")
                 FilterBar(showSource: false)
                 now
                 timeline
@@ -31,7 +32,7 @@ struct AttentionView: View {
                 pattern
             }
             .padding(28)
-            .frame(maxWidth: 1_080)
+            .frame(maxWidth: 1_040)
             .frame(maxWidth: .infinity)
         }
     }
@@ -50,8 +51,8 @@ struct AttentionView: View {
                                      ? BrowserTheme.mintInk : BrowserTheme.coral)
             }
             VStack(alignment: .leading, spacing: 7) {
-                Text(model.nowApp.isEmpty ? "Watching…" : model.nowApp)
-                    .font(.custom(BrowserTheme.palette.displayFont, size: 32).weight(.bold))
+                Text(model.nowApp.isEmpty ? (model.watcher.isRunning ? "Watching…" : "Watcher paused") : model.nowApp)
+                    .font(.custom(BrowserTheme.palette.displayFont, size: 26).weight(.bold))
                     .foregroundStyle(BrowserTheme.ink)
                     .accessibilityAddTraits(.isHeader)
                 if !model.nowURL.isEmpty {
@@ -70,9 +71,9 @@ struct AttentionView: View {
             }
             Spacer()
         }
-        .padding(24)
-        .background(BrowserTheme.mint)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(20)
+        .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(BrowserTheme.divider))
     }
 
     // MARK: - day timeline

@@ -17,7 +17,10 @@ enum BrowserTheme {
         palette.success = DaddyPalette.mint
         palette.destructive = DaddyPalette.coral
         palette.warning = DaddyPalette.amber
-        palette.radius = 14
+        palette.radius = 10
+        palette.displayFont = palette.sansFont
+        palette.displayWeight = 600
+        palette.displayTracking = -0.025
         return palette
     }()
 
@@ -36,35 +39,29 @@ enum BrowserTheme {
     static let divider = secondaryInk.opacity(0.18)
 }
 
-/// Shared Daddy-series control pattern.
-struct DaddyButtonStyle: ButtonStyle {
-    var prominent = false
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var isHovering = false
+/// One quiet page introduction across the app's workspaces.
+struct BrowserPageHeader: View {
+    let title: String
+    let subtitle: String
+    let icon: String
 
-    func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
-        return configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .padding(.horizontal, 11).padding(.vertical, 7)
-            .foregroundStyle(prominent ? Color.black : BrowserTheme.mintInk)
-            .background(prominent ? BrowserTheme.mintInk
-                        : isHovering && isEnabled ? BrowserTheme.mint : Color.black,
-                        in: shape)
-            .overlay(shape
-                .stroke(BrowserTheme.mintInk.opacity(prominent ? 1
-                    : isHovering && isEnabled ? 0.7 : 0.35),
-                        lineWidth: 1))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
-            .contentShape(shape)
-            .onHover { isHovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovering)
-    }
-}
-
-struct PrimaryActionButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        DaddyButtonStyle(prominent: true).makeBody(configuration: configuration)
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(BrowserTheme.mintInk)
+                .frame(width: 42, height: 42)
+                .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 5) {
+                SMSectionHeader(title, size: 26)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(BrowserTheme.secondaryInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, 6)
     }
 }
 
@@ -77,21 +74,12 @@ struct BrowserBand<Content: View>: View {
     private var storeKey: String { "band-collapsed-\(label)" }
 
     var body: some View {
-        SMCard(padding: 24) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 24) {
-                    bandHeading.frame(width: 124, alignment: .leading)
-                    if !collapsed {
-                        Divider()
-                        content.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 16) {
-                    bandHeading
-                    if !collapsed {
-                        Divider()
-                        content.frame(maxWidth: .infinity, alignment: .leading)
-                    }
+        SMCard(padding: 20) {
+            VStack(alignment: .leading, spacing: 18) {
+                bandHeading
+                if !collapsed {
+                    Divider().overlay(BrowserTheme.divider)
+                    content.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -105,19 +93,22 @@ struct BrowserBand<Content: View>: View {
             withAnimation(.easeInOut(duration: 0.15)) { collapsed.toggle() }
             UserDefaults.standard.set(collapsed, forKey: storeKey)
         } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    Image(systemName: collapsed ? "chevron.right"
-                                                : "chevron.down")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(BrowserTheme.mintInk)
-                    SMSectionHeader(label, size: 14)
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(label.localizedLowercase)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(BrowserTheme.ink)
                         .accessibilityAddTraits(.isHeader)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(BrowserTheme.secondaryInk)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(BrowserTheme.secondaryInk.opacity(0.78))
-                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(BrowserTheme.secondaryInk)
+                    .padding(.top, 3)
             }
             .contentShape(Rectangle())
         }
@@ -295,7 +286,7 @@ extension View {
         return environment(\.smPalette, palette)
             .tint(palette.brand)
             .foregroundStyle(palette.foreground)
-            .font(.custom(palette.sansFont, size: 16, relativeTo: .body))
+            .font(.custom(palette.sansFont, size: 14, relativeTo: .body))
             .background(palette.background.ignoresSafeArea())
             .preferredColorScheme(palette.isDark ? .dark : .light)
     }

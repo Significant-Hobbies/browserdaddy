@@ -199,7 +199,13 @@ struct TrendLine: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var shown: String { format(points[hover ?? points.count - 1]) }
+    private var shown: String { format(Self.displayedPoint(points: points, hover: hover)) }
+
+    /// A refresh can empty or shorten a series while the pointer is over it.
+    static func displayedPoint(points: [Double], hover: Int?) -> Double? {
+        if let hover, points.indices.contains(hover) { return points[hover] }
+        return points.last
+    }
     private func hoverLabel(_ i: Int) -> String {
         pointLabels.indices.contains(i) ? pointLabels[i] : ""
     }
