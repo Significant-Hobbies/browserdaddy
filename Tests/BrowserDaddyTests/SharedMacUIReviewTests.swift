@@ -89,7 +89,7 @@ final class SharedMacUIReviewTests: XCTestCase {
             "scenes": UIReviewScene.allCases.map(\.rawValue),
             "doneFile": doneURL.path,
             "readOnlyScenes": ["Permissions", "Alerts"],
-            "note": "Real production controls. Do not enable notification consent, browser access, login or external tagging. History and blocking write only temporary fixture data."
+            "note": "Permissions and Alerts are disabled to prevent OS access, login, notification or external tagging actions. History and blocking write only temporary fixture data."
         ]
         try JSONSerialization.data(withJSONObject: ready, options: [.prettyPrinted, .sortedKeys])
             .write(to: outputURL.appendingPathComponent("ready.json"), options: .atomic)
@@ -155,8 +155,8 @@ private struct UIReviewHost: View {
                 switch state.scene {
                 case .history: HistoryView()
                 case .blocking: BlockingView(controller: controller, protectionCheck: protection)
-                case .alerts: AlertSettingsView().padding(24).frame(maxWidth: 480)
-                case .permissions: PermissionsView()
+                case .alerts: AlertSettingsView().disabled(true).padding(24).frame(maxWidth: 480)
+                case .permissions: PermissionsView().disabled(true)
                 }
             }
             .environmentObject(model)
