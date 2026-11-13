@@ -28,6 +28,7 @@ struct BrowserDaddySceneReviewApp: App {
                 .smWorkspaceWindowChrome()
                 .browserTheme(BrowserTheme.palette)
                 .buttonStyle(SMMacButtonStyle(.secondary))
+                .disabled(true)
         }
         .defaultSize(width: 1240, height: 800)
         .windowStyle(.titleBar)
@@ -43,8 +44,8 @@ private final class SceneFixture {
     static let title = "BrowserDaddy · Standalone SwiftUI fixture"
     let model: AppModel
     let controller: BlockingController
-    let protection = ProtectionCheckModel(networkAllowed: false)
-    private let native = SceneFixturePreferences()
+    let protection: ProtectionCheckModel
+    private let native: SceneFixturePreferences
     private let output: URL
     private let temporary: URL
     private let defaults: UserDefaults
@@ -69,31 +70,40 @@ private final class SceneFixture {
         guard FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == expectedHome.standardizedFileURL else {
             throw CocoaError(.fileReadNoPermission)
         }
+        guard BrowserUIResources.loaded else { throw CocoaError(.fileReadCorruptFile) }
+        protection = ProtectionCheckModel(networkAllowed: false)
+        native = SceneFixturePreferences()
         output = URL(fileURLWithPath: try argument("--fixture-output"), isDirectory: true)
         guard !FileManager.default.fileExists(atPath: output.appendingPathComponent("ready.json").path),
-              !FileManager.default.fileExists(atPath: output.appendingPathComponent("done").path) else {
+              !FileManager.default.fileExists(atPath: output.appendingPathComponent("done").path),
+              !FileManager.default.fileExists(atPath: output.appendingPathComponent("finished.json").path) else {
             throw CocoaError(.fileWriteFileExists)
         }
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         temporary = expectedHome.appendingPathComponent("SceneFixture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         suiteName = "BrowserDaddy-standalone-fixture-\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else { throw CocoaError(.fileWriteUnknown) }
-        self.defaults = defaults
-        let store = try ArchiveStore(url: temporary.appendingPathComponent("archive.db"))
-        store.metaSet("onboarded", "1")
-        model = AppModel(store: store, startCollection: {}, previewFixture: true,
-                         browserGrantStore: BrowserGrantStore(defaults: defaults))
-        var rules = BlockingConfiguration()
-        rules.scheduledSites = [ScheduledSiteBlock(hostname: BlockingHostname("x.com")!,
-            weekdays: Set(1...7), startMinute: 600, endMinute: 0)!]
-        let rulesURL = temporary.appendingPathComponent("rules.json")
-        try rules.save(to: rulesURL)
-        controller = BlockingController(rulesURL: rulesURL, preview: true, preferences: native,
-            extensionAvailable: false, extensionActivation: { _ in
-                preconditionFailure("A fixture must never request extension activation")
-            })
-        guard BrowserUIResources.loaded else { throw CocoaError(.fileReadCorruptFile) }
+        do {
+            guard let defaults = UserDefaults(suiteName: suiteName) else { throw CocoaError(.fileWriteUnknown) }
+            self.defaults = defaults
+            let store = try ArchiveStore(url: temporary.appendingPathComponent("archive.db"))
+            store.metaSet("onboarded", "1")
+            model = AppModel(store: store, startCollection: {}, previewFixture: true,
+                             browserGrantStore: BrowserGrantStore(defaults: defaults))
+            var rules = BlockingConfiguration()
+            rules.scheduledSites = [ScheduledSiteBlock(hostname: BlockingHostname("x.com")!,
+                weekdays: Set(1...7), startMinute: 600, endMinute: 0)!]
+            let rulesURL = temporary.appendingPathComponent("rules.json")
+            try rules.save(to: rulesURL)
+            controller = BlockingController(rulesURL: rulesURL, preview: true, preferences: native,
+                extensionAvailable: false, extensionActivation: { _ in
+                    preconditionFailure("A fixture must never request extension activation")
+                })
+        } catch {
+            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
         Task { await model.reload() }
         let started = Date()
         let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
@@ -117,6 +127,8 @@ private final class SceneFixture {
                                 "nativeContentHeight": window.contentView?.bounds.height ?? 0,
                                 "nativeTitlebarAppearsTransparent": window.titlebarAppearsTransparent,
                                 "privateHomeVerified": true,
+                                "fixtureTitleDiffersFromProduction": true,
+                                "allFixtureContentDisabled": true,
                                 "doneFile": self.output.appendingPathComponent("done").path
                             ]
                             try self.write(ready, name: "ready.json")
@@ -143,13 +155,15 @@ private final class SceneFixture {
     private func stop(success: Bool) -> Never {
         stopping = true
         timer?.invalidate()
-        let isolated = native.loadCount == 0 && native.applyCount == 0 && !controller.enabled
+        let previewState = controller.status == "Preview · filter inactive"
+        let isolated = native.loadCount == 0 && native.applyCount == 0 && !controller.enabled && previewState
         do {
             defaults.removePersistentDomain(forName: suiteName)
             try FileManager.default.removeItem(at: temporary)
             let state: [String: Any] = ["nativePreferencesLoads": native.loadCount,
                 "nativePreferencesApplies": native.applyCount, "blockingEnabled": controller.enabled,
                 "isolationVerified": isolated, "fixtureCleanupCompleted": true,
+                "previewStateConfirmed": previewState, "preferenceCountersAreRegressionTripwires": true,
                 "sceneReady": wroteReady, "successful": success && isolated]
             try write(state, name: "finished.json")
             FileHandle.standardOutput.write(Data("Standalone scene fixture finished; isolation=\(isolated)\n".utf8))

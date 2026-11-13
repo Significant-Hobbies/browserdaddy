@@ -7,8 +7,14 @@ import shutil
 import sys
 
 repo = Path(__file__).resolve().parent.parent
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+require(len(sys.argv) == 2, 'Supply one fresh generated package directory')
 output = Path(sys.argv[1]).resolve()
-assert output.is_relative_to(repo / '.build') and not output.exists()
+require(output.is_relative_to(repo / '.build') and not output.exists(), 'Use a fresh directory inside .build')
 output.mkdir(parents=True)
 source = output / 'Sources' / 'BrowserDaddySceneReview'
 source.mkdir(parents=True)
@@ -26,27 +32,28 @@ for path in sorted((repo / 'Sources' / 'BrowserDaddy').rglob('*')):
     target = source / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, target)
-    assert target.read_bytes() == path.read_bytes()
+    require(target.read_bytes() == path.read_bytes(), 'A copied product input differs')
     hashes[str(path.relative_to(repo))] = digest(path.read_bytes())
 
 app = (repo / 'Sources/BrowserDaddy/BrowserDaddyApp.swift').read_bytes()
 boundary = b'enum Workspace: String, CaseIterable, Identifiable {'
-assert app.count(boundary) == 1
+require(app.count(boundary) == 1, 'Workspace source boundary must be unique')
 tail = boundary + app.split(boundary, 1)[1]
 imports = b'import SwiftUI\nimport AppKit\nimport BrowserCore\nimport SaaSMakerUI\n\n'
 (source / 'ActualWorkspaceRoot.swift').write_bytes(imports + tail)
-assert (source / 'ActualWorkspaceRoot.swift').read_bytes()[len(imports):] == tail
-assert b'BrowserDaddyApp:' not in tail and b'AppStartup' not in tail and b'@main' not in tail
+tail_equal = (source / 'ActualWorkspaceRoot.swift').read_bytes()[len(imports):] == tail
+startup_excluded = b'BrowserDaddyApp:' not in tail and b'AppStartup' not in tail and b'@main' not in tail
+require(tail_equal and startup_excluded, 'The exact UI tail must exclude product startup')
 
 for name, destination in [('BrowserDaddySceneReview.swift', source), ('SceneReviewRunner.swift', runner)]:
     fixture = repo / 'scripts' / 'fixtures' / name
     shutil.copy2(fixture, destination / name)
-    assert (destination / name).read_bytes() == fixture.read_bytes()
+    require((destination / name).read_bytes() == fixture.read_bytes(), 'A fixture source copy differs')
     hashes[str(fixture.relative_to(repo))] = digest(fixture.read_bytes())
 
 resolved = json.loads((repo / 'Package.resolved').read_text())
 ui = next(pin['state']['revision'] for pin in resolved['pins'] if pin['identity'] == 'ui-library')
-assert ui == 'f45faf3eb04af08cff2022710c8b8157a60bf5fa'
+require(ui == 'f45faf3eb04af08cff2022710c8b8157a60bf5fa', 'Unexpected shared chrome revision')
 manifest = '''// swift-tools-version: 6.0
 import PackageDescription
 let package = Package(
@@ -69,8 +76,8 @@ let package = Package(
 '''.replace('REPO', json.dumps(str(repo))).replace('IDENTITY', json.dumps(repo.name.lower())).replace('UI)', json.dumps(ui) + ')')
 (output / 'Package.swift').write_text(manifest)
 provenance = {'originalAppSHA256': digest(app), 'workspaceRootTailSHA256': digest(tail),
-              'workspaceRootTailByteIdentical': True, 'productionEntryStartupExcluded': True,
+              'workspaceRootTailByteIdentical': tail_equal, 'productionEntryStartupExcluded': startup_excluded,
               'sharedUIRevision': ui, 'copiedSourceSHA256': hashes}
 (output / 'source-provenance.json').write_text(json.dumps(provenance, indent=2, sort_keys=True))
-print(json.dumps({'package': str(output), 'workspaceRootTailByteIdentical': True,
-                  'productionEntryStartupExcluded': True, 'copiedSourceFiles': len(hashes)}))
+print(json.dumps({'package': str(output), 'workspaceRootTailByteIdentical': tail_equal,
+                  'productionEntryStartupExcluded': startup_excluded, 'copiedSourceFiles': len(hashes)}))
