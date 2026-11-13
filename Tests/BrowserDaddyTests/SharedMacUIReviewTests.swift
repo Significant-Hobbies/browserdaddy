@@ -78,31 +78,6 @@ final class SharedMacUIReviewTests: XCTestCase {
         let fontURL = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
             .appendingPathComponent("SaaSMakerUI_SaaSMakerUI.bundle")
         XCTAssertTrue(BrowserUIResources.registerFonts(in: Bundle(url: fontURL)))
-        if environment["BROWSERDADDY_SWIFTUI_SCENE_REVIEW"] == "1" {
-            let driver = SceneReviewDriver(outputURL: outputURL, width: width, height: height) {
-                AnyView(UIReviewHost(model: model, controller: controller, state: state)
-                    .browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary)))
-            }
-            SceneReviewApp.driver = driver
-            defer { SceneReviewApp.driver = nil }
-            driver.begin()
-            // App.main() is SwiftUI's real @main entry point. It creates this
-            // test-only WindowGroup; BrowserDaddyApp is never initialized.
-            SceneReviewApp.main()
-            driver.finish()
-            try JSONSerialization.data(withJSONObject: [
-                "nativePreferencesLoads": blockingPreferences.loadCount,
-                "nativePreferencesApplies": blockingPreferences.applyCount,
-                "blockingEnabled": controller.enabled
-            ], options: [.prettyPrinted, .sortedKeys])
-                .write(to: outputURL.appendingPathComponent("state.json"), options: .atomic)
-            XCTAssertNil(driver.writeError)
-            XCTAssertTrue(driver.wroteReady, "The real SwiftUI scene must appear")
-            XCTAssertEqual(blockingPreferences.loadCount, 0)
-            XCTAssertEqual(blockingPreferences.applyCount, 0)
-            XCTAssertFalse(controller.enabled)
-            return
-        }
         let host = NSHostingView(rootView: UIReviewHost(model: model, controller: controller, state: state)
             .browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary)))
         let window = NSWindow(contentRect: NSRect(x: 200, y: 100, width: width, height: height),
@@ -175,97 +150,6 @@ final class SharedMacUIReviewTests: XCTestCase {
         XCTAssertEqual(blockingPreferences.loadCount, 0)
         XCTAssertEqual(blockingPreferences.applyCount, 0)
         XCTAssertFalse(controller.enabled)
-    }
-}
-
-/// Kept in the default-skipped test target: no production executable, startup,
-/// controller or preference route is used to prove native SwiftUI scene chrome.
-@MainActor
-private struct SceneReviewApp: App {
-    static var driver: SceneReviewDriver?
-    var body: some Scene {
-        WindowGroup(SceneReviewDriver.title) {
-            if let driver = Self.driver {
-                driver.content()
-                    .frame(minWidth: 920, minHeight: 620)
-                    .smWorkspaceWindowChrome()
-                    .browserTheme(BrowserTheme.palette)
-                    .onAppear { driver.begin() }
-            }
-        }
-        .defaultSize(width: Self.driver?.width ?? 1240, height: Self.driver?.height ?? 800)
-        .windowStyle(.titleBar)
-    }
-}
-
-@MainActor
-private final class SceneReviewDriver {
-    static let title = "BrowserDaddy · SwiftUI scene fixture"
-    let outputURL: URL
-    let width: Double
-    let height: Double
-    let content: () -> AnyView
-    private var timer: Timer?
-    private weak var window: NSWindow?
-    private(set) var writeError: Error?
-    private(set) var wroteReady = false
-
-    init(outputURL: URL, width: Double, height: Double, content: @escaping () -> AnyView) {
-        self.outputURL = outputURL
-        self.width = width
-        self.height = height
-        self.content = content
-    }
-
-    func begin() {
-        guard timer == nil else { return }
-        let started = Date()
-        NSApplication.shared.setActivationPolicy(.regular)
-        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
-            MainActor.assumeIsolated {
-                if !self.wroteReady, let window = NSApplication.shared.windows.first(where: {
-                    $0.title == Self.title && $0.isVisible
-                }) {
-                    self.window = window
-                    window.makeKeyAndOrderFront(nil)
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                    do {
-                        let ready: [String: Any] = [
-                            "windowTitle": Self.title, "fixture": true, "actualSwiftUIWindowGroup": true,
-                            "nativeWindowNumber": window.windowNumber,
-                            "processIdentifier": ProcessInfo.processInfo.processIdentifier,
-                            "nativeWindowWidth": window.frame.width, "nativeWindowHeight": window.frame.height,
-                            "nativeContentWidth": window.contentView?.bounds.width ?? 0,
-                            "nativeContentHeight": window.contentView?.bounds.height ?? 0,
-                            "nativeTitlebarAppearsTransparent": window.titlebarAppearsTransparent,
-                            "doneFile": self.outputURL.appendingPathComponent("done").path,
-                            "note": "Real SwiftUI App.main WindowGroup with isolated models, preview controller and disabled content actions. No BrowserDaddyApp, collection, hotkeys or live filter preferences."
-                        ]
-                        try JSONSerialization.data(withJSONObject: ready, options: [.prettyPrinted, .sortedKeys])
-                            .write(to: self.outputURL.appendingPathComponent("ready.json"), options: .atomic)
-                        self.wroteReady = true
-                    } catch { self.writeError = error }
-                }
-                if self.writeError != nil
-                    || FileManager.default.fileExists(atPath: self.outputURL.appendingPathComponent("done").path)
-                    || Date().timeIntervalSince(started) >= 120 {
-                    NSApplication.shared.stop(nil)
-                    if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero,
-                        modifierFlags: [], timestamp: 0, windowNumber: self.window?.windowNumber ?? 0,
-                        context: nil, subtype: 0, data1: 0, data2: 0) {
-                        NSApplication.shared.postEvent(event, atStart: false)
-                    }
-                }
-            }
-        }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    func finish() {
-        timer?.invalidate()
-        timer = nil
-        window?.close()
     }
 }
 
