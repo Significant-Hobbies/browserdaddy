@@ -15,64 +15,41 @@ struct BlockingView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                BrowserPageHeader(title: "Website blocking", subtitle: "Keep distractions out of every browser.", icon: "shield.lefthalf.filled")
-                filterStatus
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        SMSectionHeader("Schedules", size: 20)
-                        Text("Choose the hours a website stays out of reach.").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                    }
-                    Spacer(minLength: 16)
-                    Button("Add schedule") { showingSchedule = true }
-                        .buttonStyle(SMMacButtonStyle(.primary))
-                        .disabled(!controller.ready || controller.busy || scheduleLimitReached)
-                        .accessibilityIdentifier("add-schedule")
-                }
-                if scheduleLimitReached {
-                    Text("The limit of \(ScheduledSiteBlock.maximumCount) saved schedules has been reached.")
-                        .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                }
-                if !controller.ready {
-                    SMCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(controller.loadError.isEmpty ? "Loading schedules…" : "Schedules could not load")
-                                .font(.headline)
-                            Text(controller.loadError.isEmpty
-                                 ? "Your saved schedules will appear when loading completes."
-                                 : "Saved data is preserved. Use Refresh status to retry.")
-                                .foregroundStyle(BrowserTheme.palette.mutedForeground)
+        GeometryReader { geometry in
+            if geometry.size.width >= 1_000 {
+                HStack(alignment: .top, spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 28) {
+                            pageHeading
+                            schedules
+                            alwaysBlocked
                         }
+                        .padding(30)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } else if scheduleGroups.isEmpty {
-                    SMCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Label("No scheduled blocks", systemImage: "calendar")
-                                .font(.headline)
-                            Text("Add a website and choose the hours and days to block it.")
-                                .foregroundStyle(BrowserTheme.palette.mutedForeground)
-                        }
-                    }
-                } else {
-                    VStack(spacing: 16) {
-                        ForEach(scheduleGroups) { group in
-                            BlockingScheduleCard(group: group)
-                        }
-                    }
+                    Rectangle().fill(BrowserTheme.divider).frame(width: 1)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
+                            Text("PROTECTION").font(.system(size: 10, weight: .medium)).tracking(1.2)
+                                .foregroundStyle(BrowserTheme.secondaryInk)
+                            filterStatus
+                            lockedRulesNote
+                            protectionDetails
+                        }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(width: 280)
                 }
-                alwaysBlocked
-                Label("Saved rules are locked. Ask in Codex chat to change or remove one.", systemImage: "lock")
-                    .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                VStack(alignment: .leading, spacing: 16) {
-                    DisclosureGroup("Check protection") { protectionCheckBand.padding(.top, 12) }
-                    DisclosureGroup("Coverage, privacy & list sources") { coverageDetails.padding(.top, 12) }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        pageHeading
+                        filterStatus
+                        schedules
+                        alwaysBlocked
+                        lockedRulesNote
+                        protectionDetails
+                    }.padding(30).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.callout)
             }
-            .padding(28)
-            .frame(maxWidth: 1_040, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.palette.background)
         .buttonStyle(SMMacButtonStyle(.secondary))
@@ -97,6 +74,70 @@ struct BlockingView: View {
         }
     }
 
+    private var pageHeading: some View {
+        BrowserPageHeader(title: "Website blocking", subtitle: "Keep distractions out of every browser.", icon: "shield.lefthalf.filled")
+    }
+
+    private var schedules: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 5) {
+                    SMSectionHeader("Schedules", size: 20)
+                    Text("Choose the hours a website stays out of reach.").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                }
+                Spacer(minLength: 16)
+                Button("Add schedule") { showingSchedule = true }
+                    .buttonStyle(SMMacButtonStyle(.primary))
+                    .disabled(!controller.ready || controller.busy || scheduleLimitReached)
+                    .accessibilityIdentifier("add-schedule")
+            }
+            if scheduleLimitReached {
+                Text("The limit of \(ScheduledSiteBlock.maximumCount) saved schedules has been reached.")
+                    .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+            }
+            if !controller.ready {
+                SMCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(controller.loadError.isEmpty ? "Loading schedules…" : "Schedules could not load")
+                            .font(.headline)
+                        Text(controller.loadError.isEmpty
+                             ? "Your saved schedules will appear when loading completes."
+                             : "Saved data is preserved. Use Refresh status to retry.")
+                            .foregroundStyle(BrowserTheme.palette.mutedForeground)
+                    }
+                }
+            } else if scheduleGroups.isEmpty {
+                SMCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("No scheduled blocks", systemImage: "calendar")
+                            .font(.headline)
+                        Text("Add a website and choose the hours and days to block it.")
+                            .foregroundStyle(BrowserTheme.palette.mutedForeground)
+                    }
+                }
+            } else {
+                VStack(spacing: 16) {
+                    ForEach(scheduleGroups) { group in
+                        BlockingScheduleCard(group: group)
+                    }
+                }
+            }
+        }
+    }
+
+    private var lockedRulesNote: some View {
+        Label("Saved rules are locked. Ask in Codex chat to change or remove one.", systemImage: "lock")
+            .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+    }
+
+    private var protectionDetails: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            DisclosureGroup("Check protection") { protectionCheckBand.padding(.top, 12) }
+            DisclosureGroup("Coverage, privacy & list sources") { coverageDetails.padding(.top, 12) }
+        }
+        .font(.callout)
+    }
+
     private var scheduleLimitReached: Bool {
         controller.configuration.scheduledSites.count >= ScheduledSiteBlock.maximumCount
     }
@@ -106,29 +147,30 @@ struct BlockingView: View {
     }
 
     private var filterStatus: some View {
-        SMCard(padding: 12) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Image(systemName: "shield.lefthalf.filled").foregroundStyle(BrowserTheme.palette.mutedForeground)
-                    Text(controller.status).font(.callout)
-                    Spacer(minLength: 8)
-                    if controller.busy { ProgressView().controlSize(.small) }
-                    if controller.extensionBundled {
-                        Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") { controller.enable() }
-                            .disabled(controller.busy || !controller.ready)
-                    }
-                    Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled").foregroundStyle(BrowserTheme.palette.mutedForeground)
+                Text(controller.status).font(.callout.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                if controller.busy { ProgressView().controlSize(.small) }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                if controller.extensionBundled {
+                    Button(controller.enabled ? "Apply protected rules" : "Enable protected filter") { controller.enable() }
+                        .disabled(controller.busy || !controller.ready)
                 }
-                if !controller.extensionBundled {
-                    Text("Rules are saved locally. This build needs the signed network filter before it can block connections.")
-                        .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                }
-                ForEach(warnings, id: \.self) { warning in
-                    Text(warning).font(.callout).foregroundStyle(BrowserTheme.palette.destructive).textSelection(.enabled)
-                }
-                if !controller.nativeRecoveryNote.isEmpty {
-                    Text(controller.nativeRecoveryNote).font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                }
+                Button("Refresh status") { controller.refresh() }.disabled(controller.busy)
+            }
+            if !controller.extensionBundled {
+                Text("Rules are saved locally. This build needs the signed network filter before it can block connections.")
+                    .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
+            }
+            ForEach(warnings, id: \.self) { warning in
+                Text(warning).font(.callout).foregroundStyle(BrowserTheme.palette.destructive).textSelection(.enabled)
+            }
+            if !controller.nativeRecoveryNote.isEmpty {
+                Text(controller.nativeRecoveryNote).font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
             }
         }
     }
@@ -142,11 +184,11 @@ struct BlockingView: View {
     }
 
     private var alwaysBlocked: some View {
-        SMSettingsGroup("Always blocked", footer: "A domain rule includes its subdomains.") {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Always blocked").font(.custom(BrowserTheme.palette.sansFont, size: 18).weight(.semibold))
             VStack(spacing: 0) {
                 ForEach(BlockingCategory.allCases.filter { controller.configuration.categories.contains($0) }, id: \.self) { category in
                     permanentRow(category.title, detail: "All day")
-                    Divider().padding(.horizontal, 16)
                 }
                 ForEach(controller.configuration.sites.sorted(by: { $0.value < $1.value }), id: \.self) { host in
                     permanentRow(host.value, detail: "All day")
@@ -158,7 +200,6 @@ struct BlockingView: View {
                         .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                         .padding(16)
                 }
-                Divider().padding(.horizontal, 16)
                 HStack {
                     TextField("example.com", text: $site)
                         .textFieldStyle(.roundedBorder)
@@ -168,17 +209,24 @@ struct BlockingView: View {
                         .disabled(BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
                 }
                 .disabled(!controller.ready || controller.busy)
-                .padding(16)
+                .padding(.top, 18)
             }
+            Text("A domain rule includes its subdomains.")
+                .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
         }
     }
 
     private func permanentRow(_ title: String, detail: String) -> some View {
-        SMSettingsRow(title) {
-            Label(detail, systemImage: "lock")
-                .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+        HStack(spacing: 12) {
+            Image(systemName: "lock").font(.system(size: 12))
+                .foregroundStyle(BrowserTheme.secondaryInk).frame(width: 18)
+            Text(title).font(.callout.weight(.medium))
+            Spacer(minLength: 16)
+            Text(detail).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
         }
         .textSelection(.enabled)
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) { Rectangle().fill(BrowserTheme.divider).frame(height: 1) }
     }
 
     private var coverageDetails: some View {

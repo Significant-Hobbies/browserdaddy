@@ -13,8 +13,13 @@ struct HistoryView: View {
         GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 0) {
                 header
-                Divider().overlay(BrowserTheme.divider)
-                if model.historyRows.isEmpty { emptyState } else { historyList }
+                if model.historyRows.isEmpty {
+                    Divider().overlay(BrowserTheme.divider)
+                    emptyState
+                } else {
+                    listHeading
+                    historyList
+                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
         }
@@ -48,7 +53,7 @@ struct HistoryView: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 18)
+        .padding(.horizontal, 30).padding(.top, 30).padding(.bottom, 24)
     }
 
     @ViewBuilder private var filterControls: some View {
@@ -141,7 +146,7 @@ struct HistoryView: View {
                 .accessibilityHint("Show visit evidence and tagging options")
                 if expandedRow == row.id { expandedDetail(row) }
             }
-            .padding(.vertical, 8)
+            .listRowInsets(EdgeInsets(top: 16, leading: 22, bottom: 16, trailing: 22))
             .listRowBackground(Color.black)
             .contextMenu { rowActions(row) }
         }
@@ -150,33 +155,46 @@ struct HistoryView: View {
         .background(Color.black)
     }
 
+    private var listHeading: some View {
+        HStack(spacing: 16) {
+            Text("PAGE / ADDRESS").frame(maxWidth: .infinity, alignment: .leading)
+            Text("BROWSER").frame(width: 100, alignment: .leading)
+            Text("VISITED").frame(width: 120, alignment: .trailing)
+            Color.clear.frame(width: 16, height: 1)
+        }
+        .font(.system(size: 10, weight: .medium)).tracking(1)
+        .foregroundStyle(BrowserTheme.secondaryInk)
+        .padding(.horizontal, 30).padding(.vertical, 12)
+        .overlay(alignment: .bottom) { Rectangle().fill(BrowserTheme.divider).frame(height: 1) }
+    }
+
     private func summary(_ row: AppModel.HistoryRow) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(row.title.isEmpty ? row.url : row.title)
+                        .font(.callout.weight(.medium)).foregroundStyle(BrowserTheme.ink)
+                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    if let category = row.category {
+                        Text(category).font(.caption2.weight(.medium))
+                            .foregroundStyle(BrowserTheme.mintInk)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(BrowserTheme.mintInk.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                Text(row.url).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                    .lineLimit(1).truncationMode(.middle)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(row.browser).font(.caption.weight(.medium)).foregroundStyle(BrowserTheme.ink)
+                Text(row.profile).font(.caption2).foregroundStyle(BrowserTheme.secondaryInk).lineLimit(1)
+            }.frame(width: 100, alignment: .leading)
             Text(row.time?.formatted(date: .abbreviated, time: .shortened) ?? "—")
                 .font(.caption.monospacedDigit()).foregroundStyle(BrowserTheme.secondaryInk)
-                .frame(width: 150, alignment: .leading)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.browser).font(.caption.weight(.medium)).foregroundStyle(BrowserTheme.cyan)
-                Text(row.profile).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }.frame(width: 90, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.title.isEmpty ? row.url : row.title)
-                    .foregroundStyle(BrowserTheme.ink).lineLimit(1).truncationMode(.tail)
-                Text(row.url).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-            if let category = row.category {
-                Text(category).font(.caption2.weight(.semibold))
-                    .foregroundStyle(row.tagSource == "user" ? Color.black : BrowserTheme.mintInk)
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(row.tagSource == "user" ? BrowserTheme.mintInk
-                                : BrowserTheme.mintInk.opacity(0.12), in: Capsule())
-            } else {
-                Text("untagged").font(.caption2).foregroundStyle(.tertiary)
-            }
+                .lineLimit(2).multilineTextAlignment(.trailing)
+                .frame(width: 120, alignment: .trailing)
             Image(systemName: expandedRow == row.id ? "chevron.down" : "chevron.right")
-                .font(.caption.weight(.bold)).foregroundStyle(BrowserTheme.mintInk)
+                .font(.system(size: 10, weight: .medium)).foregroundStyle(BrowserTheme.secondaryInk)
                 .frame(width: 16)
         }
         .contentShape(Rectangle())
@@ -207,7 +225,7 @@ struct HistoryView: View {
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
-        .padding(.leading, 252).padding(.top, 8).padding(.bottom, 6)
+        .padding(.top, 16).padding(.bottom, 6)
     }
 
     private func detailLine(_ label: String, _ value: String) -> some View {
@@ -233,7 +251,7 @@ struct HistoryView: View {
     private var emptyState: some View {
         VStack(spacing: 18) {
             Spacer()
-            DaddyArtwork().frame(width: 72, height: 72)
+            DaddyArtwork().frame(width: 160, height: 140)
             SMDisplay(model.report == nil || model.report?.totalVisits == 0
                       ? "Nothing archived yet" : "No matches", size: 22)
             Text(model.report == nil || model.report?.totalVisits == 0

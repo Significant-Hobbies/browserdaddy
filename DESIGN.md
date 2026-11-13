@@ -18,6 +18,15 @@ focus, error, disabled and tooltip behavior remain unchanged. Branding is a
 precise accent, not a reason to crowd operational tables or add idle animation.
 Large art must not be reduced to the compact logo's job.
 
+On 2026-11-13 the owner selected direction A from the native cleanup studies:
+a permanent 198-point left rail, pure black canvas, mint selection, Geist body
+type, Figtree headings and deliberate 30-point working gutters. Keep all seven
+destinations available. Give schedules and rules the primary blocking column;
+place the existing protection status and supporting details in a quiet inspector
+when width allows. Use hairlines and hierarchy for working sections, with cards
+reserved for distinct objects such as a saved schedule. The Tab Scout remains
+the app's identity and has a deliberate, responsive place in the sidebar.
+
 On 2026-09-26 the owner reaffirmed the current native direction. Polish the
 Mac utility's controls and states within this system; the three dashboard-style
 replacement concepts were rejected.

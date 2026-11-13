@@ -31,8 +31,8 @@ struct AttentionView: View {
                 appsAndSites
                 pattern
             }
-            .padding(28)
-            .frame(maxWidth: 1_040)
+            .padding(.horizontal, 30).padding(.top, 30).padding(.bottom, 40)
+            .frame(maxWidth: 1_200)
             .frame(maxWidth: .infinity)
         }
     }
@@ -72,8 +72,9 @@ struct AttentionView: View {
             Spacer()
         }
         .padding(20)
-        .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(BrowserTheme.divider))
+        .background(BrowserTheme.palette.background)
+        .overlay(alignment: .top) { Rectangle().fill(BrowserTheme.divider).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(BrowserTheme.divider).frame(height: 1) }
     }
 
     // MARK: - day timeline

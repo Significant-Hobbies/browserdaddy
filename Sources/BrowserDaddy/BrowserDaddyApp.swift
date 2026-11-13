@@ -305,6 +305,7 @@ struct BrowserDaddyApp: App {
             .padding(24).frame(width: 480)
             .browserTheme(BrowserTheme.palette)
             .buttonStyle(SMMacButtonStyle(.secondary))
+            .background(SMWorkspaceWindowChrome().environment(\.smPalette, BrowserTheme.palette))
         }
     }
 
@@ -323,6 +324,7 @@ struct BrowserDaddyApp: App {
                 }
             }
             .frame(minWidth: 920, minHeight: 620)
+            .background(SMWorkspaceWindowChrome().environment(\.smPalette, BrowserTheme.palette))
             .onAppear { BrowserStartupCheck.windowAppeared() }
         }
         .defaultSize(width: 1240, height: 800)
@@ -369,8 +371,23 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var workspace: Workspace
 
+    private let reviewBlockingController: BlockingController?
+    private let reviewProtectionCheck: ProtectionCheckModel?
+    private let reviewOnly: Bool
+
     init() {
         _workspace = State(initialValue: Self.initialWorkspace(arguments: CommandLine.arguments))
+        reviewBlockingController = nil
+        reviewProtectionCheck = nil
+        reviewOnly = false
+    }
+
+    init(reviewWorkspace: Workspace, blockingController: BlockingController,
+         protectionCheck: ProtectionCheckModel) {
+        _workspace = State(initialValue: reviewWorkspace)
+        reviewBlockingController = blockingController
+        reviewProtectionCheck = protectionCheck
+        reviewOnly = true
     }
 
     static func initialWorkspace(arguments: [String]) -> Workspace {
@@ -380,64 +397,24 @@ struct RootView: View {
         return arguments.contains("--check-app-startup") ? .attention : .blocking
     }
 
-    private static let brandMark = DaddyResources.url(forResource: "BrowserDaddyIcon")
-        .flatMap(NSImage.init(contentsOf:)).map { Image(nsImage: $0) }
-
-    private var selection: Binding<String?> {
-        Binding(get: { workspace.rawValue }, set: { value in
-            if let value, let selected = Workspace(rawValue: value) { workspace = selected }
-        })
-    }
-
-    private var navigationSections: [SMNavSection] {
-        [("Live", [Workspace.attention, .tabs]),
-         ("Archive", [.dashboard, .history]),
-         ("Setup", [.router, .blocking, .permissions])].map { title, destinations in
-            SMNavSection(title, items: destinations.map {
-                SMNavItem($0.rawValue, id: $0.rawValue, systemImage: $0.icon)
-            })
-        }
-    }
-
     var body: some View {
-        GeometryReader { geometry in
-            SMAppShell(brand: "BrowserDaddy", mark: Self.brandMark,
-                       sections: navigationSections, selection: selection) {
-                VStack(spacing: 0) {
-                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    Divider().overlay(BrowserTheme.palette.hairline)
-                    if workspace == .blocking {
-                        HStack {
-                            Label("Filter does not save a visit log", systemImage: "lock")
-                            Spacer()
-                        }
-                        .font(.caption).foregroundStyle(BrowserTheme.secondaryInk).padding(10)
-                    } else {
-                        statusBar
-                    }
-                }
-                .buttonStyle(SMMacButtonStyle(.secondary))
+        BrowserWorkspaceChrome(workspace: $workspace, reviewOnly: reviewOnly) {
+            content
+        } footer: {
+            if workspace == .blocking {
+                Label("Filter does not save a visit log", systemImage: "lock")
+                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+                    .padding(.horizontal, 24).padding(.vertical, 9)
+            } else {
+                statusBar
             }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .browserTheme(BrowserTheme.palette)
-            .toolbarBackground(BrowserTheme.palette.background, for: .windowToolbar)
-            .toolbarBackground(.visible, for: .windowToolbar)
-            .toolbar {
-                if workspace != .blocking {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            model.runExtract()
-                        } label: {
-                            Label(model.extracting ? "Syncing…" : "Sync History", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .buttonStyle(SMMacButtonStyle(.secondary))
-                        .disabled(model.extracting)
-                    }
-                }
-            }
-            .sheet(isPresented: $model.showAbout) {
-                about.browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary))
-            }
+        }
+        .buttonStyle(SMMacButtonStyle(.secondary))
+        .browserTheme(BrowserTheme.palette)
+        .toolbarBackground(BrowserTheme.palette.background, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
+        .sheet(isPresented: $model.showAbout) {
+            about.browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary))
         }
     }
 
@@ -448,7 +425,12 @@ struct RootView: View {
         case .dashboard: DashboardView()
         case .history: HistoryView()
         case .router: RouterView()
-        case .blocking: BlockingView()
+        case .blocking:
+            if let reviewBlockingController, let reviewProtectionCheck {
+                BlockingView(controller: reviewBlockingController, protectionCheck: reviewProtectionCheck)
+            } else {
+                BlockingView()
+            }
         case .permissions: PermissionsView()
         }
     }

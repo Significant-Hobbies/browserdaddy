@@ -25,8 +25,8 @@ struct RouterView: View {
                 targetsBand
                 actionsBand
             }
-            .padding(28)
-            .frame(maxWidth: 1_040, alignment: .leading)
+            .padding(.horizontal, 30).padding(.top, 30).padding(.bottom, 40)
+            .frame(maxWidth: 1_200, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.fog)

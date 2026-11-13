@@ -8,9 +8,9 @@ enum BrowserTheme {
         palette.background = DaddyPalette.canvas
         palette.surface = DaddyPalette.canvas
         palette.card = DaddyPalette.canvas
-        palette.foreground = DaddyPalette.ink
-        palette.mutedForeground = DaddyPalette.secondaryInk
-        palette.hairline = DaddyPalette.secondaryInk.opacity(0.18)
+        palette.foreground = Color(red: 0.94, green: 0.96, blue: 0.95)
+        palette.mutedForeground = Color(red: 0.59, green: 0.64, blue: 0.61)
+        palette.hairline = Color.white.opacity(0.10)
         palette.border = palette.hairline
         palette.input = palette.hairline
         palette.accent = DaddyPalette.mint.opacity(0.11)
@@ -18,16 +18,18 @@ enum BrowserTheme {
         palette.destructive = DaddyPalette.coral
         palette.warning = DaddyPalette.amber
         palette.radius = 10
-        palette.displayFont = palette.sansFont
+        palette.displayFont = "Figtree"
         palette.displayWeight = 600
         palette.displayTracking = -0.025
+        palette.displayLowercase = false
+        palette.uiLowercase = false
         return palette
     }()
 
     static let fog = DaddyPalette.canvas
     static let surface = DaddyPalette.canvas
-    static let ink = DaddyPalette.ink
-    static let secondaryInk = DaddyPalette.secondaryInk
+    static let ink = palette.foreground
+    static let secondaryInk = palette.mutedForeground
     static let coral = DaddyPalette.coral
     static let coralWash = coral.opacity(0.12)
     static let mintInk = DaddyPalette.mint
@@ -36,7 +38,7 @@ enum BrowserTheme {
     static let blue = DaddyPalette.blue
     static let cyan = DaddyPalette.cyan
     static let amber = DaddyPalette.amber
-    static let divider = secondaryInk.opacity(0.18)
+    static let divider = palette.hairline
 }
 
 /// One quiet page introduction across the app's workspaces.
@@ -46,19 +48,12 @@ struct BrowserPageHeader: View {
     let icon: String
 
     var body: some View {
-        SMWorkspaceHeader(title, subtitle: subtitle) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(BrowserTheme.mintInk)
-                .frame(width: 42, height: 42)
-                .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 12))
-                .accessibilityHidden(true)
-        }
-        .padding(.bottom, 6)
+        SMWorkspaceHeader(title, subtitle: subtitle) { EmptyView() }
+            .padding(.bottom, 8)
     }
 }
 
-/// Labeled card section, same rhythm as PerformanceDaddy's TriageBand.
+/// A quiet, collapsible section. Content owns its rows; the page owns its gutters.
 struct BrowserBand<Content: View>: View {
     let label: String
     let subtitle: String
@@ -67,15 +62,14 @@ struct BrowserBand<Content: View>: View {
     private var storeKey: String { "band-collapsed-\(label)" }
 
     var body: some View {
-        SMCard(padding: 20) {
-            VStack(alignment: .leading, spacing: 18) {
-                bandHeading
-                if !collapsed {
-                    Divider().overlay(BrowserTheme.divider)
-                    content.frame(maxWidth: .infinity, alignment: .leading)
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            bandHeading
+            if !collapsed {
+                content.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .padding(.vertical, 24)
+        .overlay(alignment: .top) { Rectangle().fill(BrowserTheme.divider).frame(height: 1) }
         .onAppear {
             collapsed = UserDefaults.standard.bool(forKey: storeKey)
         }
@@ -88,12 +82,12 @@ struct BrowserBand<Content: View>: View {
         } label: {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(label.localizedLowercase)
-                        .font(.system(size: 14, weight: .semibold))
+                    Text(label.localizedCapitalized)
+                        .font(.custom(BrowserTheme.palette.displayFont, size: 17).weight(.semibold))
                         .foregroundStyle(BrowserTheme.ink)
                         .accessibilityAddTraits(.isHeader)
                     Text(subtitle)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(BrowserTheme.secondaryInk)
                         .fixedSize(horizontal: false, vertical: true)
                 }
