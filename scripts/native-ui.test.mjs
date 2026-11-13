@@ -27,6 +27,6 @@ test('native UI behavior contracts through XcodeBuildMCP', { timeout: 115_000 },
   verifyNativeContracts('HistoryModelTests|BlockingSchedulePresentationTests|BlockingControllerTests|CollectionConsentTests|BrowserUIResourcesTests|SharedMacUIReviewTests', 48);
 });
 
-test('native history provenance contracts through XcodeBuildMCP', { timeout: 115_000 }, () => {
+test('native history model and resource contracts through XcodeBuildMCP', { timeout: 115_000 }, () => {
   verifyNativeContracts('HistoryModelTests|BrowserUIResourcesTests|SharedMacUIReviewTests', 4);
 });
