@@ -26,9 +26,8 @@ struct BlockingView: View {
                     }
                     Spacer(minLength: 16)
                     Button("Add schedule") { showingSchedule = true }
-                        .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                        .buttonStyle(SMMacButtonStyle(.primary))
                         .disabled(!controller.ready || controller.busy || scheduleLimitReached)
-                        .opacity(!controller.ready || controller.busy || scheduleLimitReached ? 0.4 : 1)
                         .accessibilityIdentifier("add-schedule")
                 }
                 if scheduleLimitReached {
@@ -76,7 +75,7 @@ struct BlockingView: View {
             .frame(maxWidth: .infinity)
         }
         .background(BrowserTheme.palette.background)
-        .buttonStyle(SMButtonStyle(.outline, size: .compact))
+        .buttonStyle(SMMacButtonStyle(.secondary))
         .sheet(isPresented: $showingSchedule) { BlockingScheduleSheet(controller: controller) }
         .onAppear { protectionCheck.startObservingNetwork() }
         .onDisappear { protectionCheck.stopObservingNetwork() }
@@ -143,49 +142,43 @@ struct BlockingView: View {
     }
 
     private var alwaysBlocked: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SMEyebrow("Always blocked")
-            SMCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(spacing: 0) {
-                        ForEach(BlockingCategory.allCases.filter { controller.configuration.categories.contains($0) }, id: \.self) { category in
-                            permanentRow(category.title, detail: "All day")
-                            Divider().padding(.vertical, 10)
-                        }
-                        ForEach(controller.configuration.sites.sorted(by: { $0.value < $1.value }), id: \.self) { host in
-                            permanentRow(host.value, detail: "All day")
-                                .padding(.vertical, 6)
-                        }
-                        if !controller.ready {
-                            Text(controller.loadError.isEmpty
-                                 ? "Loading saved rules…"
-                                 : "Saved rules could not load. Use Refresh status to retry.")
-                                .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                        }
-                    }
-                    Divider().padding(.vertical, 6)
-                    HStack {
-                        TextField("example.com", text: $site)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Always blocked website domain")
-                            .onSubmit { addSite() }
-                        Button("Add website") { addSite() }
-                            .disabled(BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
-                    }
-                    .disabled(!controller.ready || controller.busy)
-                    Text("A domain rule includes its subdomains.").font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
+        SMSettingsGroup("Always blocked", footer: "A domain rule includes its subdomains.") {
+            VStack(spacing: 0) {
+                ForEach(BlockingCategory.allCases.filter { controller.configuration.categories.contains($0) }, id: \.self) { category in
+                    permanentRow(category.title, detail: "All day")
+                    Divider().padding(.horizontal, 16)
                 }
+                ForEach(controller.configuration.sites.sorted(by: { $0.value < $1.value }), id: \.self) { host in
+                    permanentRow(host.value, detail: "All day")
+                }
+                if !controller.ready {
+                    Text(controller.loadError.isEmpty
+                         ? "Loading saved rules…"
+                         : "Saved rules could not load. Use Refresh status to retry.")
+                        .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                        .padding(16)
+                }
+                Divider().padding(.horizontal, 16)
+                HStack {
+                    TextField("example.com", text: $site)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Always blocked website domain")
+                        .onSubmit { addSite() }
+                    Button("Add website") { addSite() }
+                        .disabled(BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
+                }
+                .disabled(!controller.ready || controller.busy)
+                .padding(16)
             }
         }
     }
 
     private func permanentRow(_ title: String, detail: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "lock").font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground).frame(width: 16)
-            Text(title).textSelection(.enabled)
-            Spacer()
-            Text(detail).font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+        SMSettingsRow(title) {
+            Label(detail, systemImage: "lock")
+                .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
         }
+        .textSelection(.enabled)
     }
 
     private var coverageDetails: some View {

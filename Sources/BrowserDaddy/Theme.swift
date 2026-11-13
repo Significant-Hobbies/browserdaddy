@@ -46,20 +46,13 @@ struct BrowserPageHeader: View {
     let icon: String
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        SMWorkspaceHeader(title, subtitle: subtitle) {
             Image(systemName: icon)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(BrowserTheme.mintInk)
                 .frame(width: 42, height: 42)
                 .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 5) {
-                SMSectionHeader(title, size: 26)
-                Text(subtitle)
-                    .font(.callout)
-                    .foregroundStyle(BrowserTheme.secondaryInk)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
+                .accessibilityHidden(true)
         }
         .padding(.bottom, 6)
     }

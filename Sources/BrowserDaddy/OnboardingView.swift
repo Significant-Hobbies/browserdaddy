@@ -69,7 +69,7 @@ struct OnboardingView: View {
             Button("Connect all detected browsers") {
                 model.connectAllBrowsers()
             }.textCase(.lowercase)
-            .buttonStyle(SMButtonStyle(.brand, size: .compact))
+            .buttonStyle(SMMacButtonStyle(.primary))
             .disabled(model.browserAccess.isEmpty)
             ForEach(model.browserAccess) { status in
                 row(ok: isConnected(status.state), title: status.kind.displayName,
@@ -136,7 +136,7 @@ struct OnboardingView: View {
                         model.runClassification()
                     }.textCase(.lowercase)
                     .disabled(model.classifying)
-                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.primary))
                     if !model.classifySummary.isEmpty {
                         Text(model.classifySummary).font(.caption)
                             .foregroundStyle(BrowserTheme.mintInk)
@@ -157,7 +157,7 @@ struct OnboardingView: View {
             Button(model.hasConnectedBrowser ? "Start watching" : "Continue without history") {
                 model.finishOnboarding()
             }.textCase(.lowercase)
-            .buttonStyle(SMButtonStyle(.brand, size: .compact))
+            .buttonStyle(SMMacButtonStyle(.primary))
             .controlSize(.large)
         }
     }
@@ -190,7 +190,7 @@ struct OnboardingView: View {
             Spacer()
             if let actionTitle, let action {
                 Button(actionTitle, action: action).textCase(.lowercase)
-                    .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.secondary))
             }
         }
     }
