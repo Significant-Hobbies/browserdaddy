@@ -177,12 +177,14 @@ struct HistoryView: View {
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                     if let category = row.category {
                         Text(category).font(.caption2.weight(.medium))
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                             .foregroundStyle(row.tagSource == "user" ? Color.black : BrowserTheme.mintInk)
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(row.tagSource == "user" ? BrowserTheme.mintInk : BrowserTheme.mintInk.opacity(0.10),
                                         in: RoundedRectangle(cornerRadius: 4))
                     } else {
                         Text("Untagged").font(.caption2).foregroundStyle(BrowserTheme.secondaryInk)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 Text(row.url).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
