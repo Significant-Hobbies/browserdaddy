@@ -88,8 +88,8 @@ final class SharedMacUIReviewTests: XCTestCase {
             "viewContentOnly": true,
             "scenes": UIReviewScene.allCases.map(\.rawValue),
             "doneFile": doneURL.path,
-            "readOnlyScenes": ["Permissions", "Alerts"],
-            "note": "Permissions and Alerts are disabled to prevent OS access, login, notification or external tagging actions. History and blocking write only temporary fixture data."
+            "readOnlyScenes": UIReviewScene.allCases.map(\.rawValue),
+            "note": "All production scenes are disabled for screenshot review. Their controls cannot open URLs, write the clipboard, request OS access, change login, request notifications or trigger external tagging. The scene picker remains available."
         ]
         try JSONSerialization.data(withJSONObject: ready, options: [.prettyPrinted, .sortedKeys])
             .write(to: outputURL.appendingPathComponent("ready.json"), options: .atomic)
@@ -155,10 +155,11 @@ private struct UIReviewHost: View {
                 switch state.scene {
                 case .history: HistoryView()
                 case .blocking: BlockingView(controller: controller, protectionCheck: protection)
-                case .alerts: AlertSettingsView().disabled(true).padding(24).frame(maxWidth: 480)
-                case .permissions: PermissionsView().disabled(true)
+                case .alerts: AlertSettingsView().padding(24).frame(maxWidth: 480)
+                case .permissions: PermissionsView()
                 }
             }
+            .disabled(true)
             .environmentObject(model)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
