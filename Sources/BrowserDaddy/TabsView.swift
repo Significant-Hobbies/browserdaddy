@@ -33,18 +33,11 @@ struct TabsView: View {
     }
 
     private var toolbar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                toolbarTitle
-                Spacer(minLength: 16)
-                toolbarControls
-            }
-            VStack(alignment: .leading, spacing: 10) {
-                toolbarTitle
-                toolbarControls
-            }
+        VStack(alignment: .leading, spacing: 22) {
+            toolbarTitle
+            toolbarControls
         }
-        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 18)
+        .padding(.horizontal, 30).padding(.top, 30).padding(.bottom, 24)
     }
 
     private var toolbarTitle: some View {
@@ -70,19 +63,9 @@ struct TabsView: View {
 
     private var toolbarControls: some View {
         HStack(spacing: 10) {
-            TextField("Search title or site", text: $model.tabSearch)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 160, maxWidth: 240)
-                .accessibilityLabel("Search open tabs")
-            if !model.tabSearch.isEmpty {
-                Button { model.tabSearch = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(BrowserTheme.secondaryInk)
-                .help("Clear search")
-                .accessibilityLabel("Clear tab search")
-            }
+            SMSearchField("Search title or site", text: $model.tabSearch,
+                          accessibilityLabel: "Search open tabs")
+                .frame(minWidth: 160, maxWidth: 320)
             if !model.tabSelection.isEmpty {
                 Button("Focus") { focusSelected() }.textCase(.lowercase)
                 Button("Close \(model.tabSelection.count) tabs") {
@@ -201,6 +184,7 @@ struct TabsView: View {
             }
         }
         .listStyle(.plain)
+        .padding(.horizontal, 22)
         .scrollContentBackground(.hidden)
     }
 
@@ -229,7 +213,7 @@ struct TabsView: View {
             .help("Close tab")
             .accessibilityLabel("Close \(tab.title.isEmpty ? tab.host : tab.title)")
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 10)
         .draggable(tab)
         .onTapGesture(count: 2) { model.focusTab(tab) }
         .contextMenu {

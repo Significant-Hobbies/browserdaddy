@@ -48,6 +48,10 @@ final class SharedMacUIReviewTests: XCTestCase {
         model.alertConfig.siteCaps = ["docs.example.test": 45]
         await model.reload()
         XCTAssertEqual(model.historyRows.count, 3)
+        model.tabGroups = [.init(kind: .chrome, state: .tabs(pages.enumerated().map { index, page in
+            BrowserTab(browser: .chrome, window: 1, index: index + 1, url: page.0, title: page.1)
+        }))]
+
 
         var rules = BlockingConfiguration()
         rules.scheduledSites = [try XCTUnwrap(ScheduledSiteBlock(
@@ -67,46 +71,82 @@ final class SharedMacUIReviewTests: XCTestCase {
         if let scene = environment["BROWSERDADDY_UI_REVIEW_SCENE"] {
             state.scene = try XCTUnwrap(UIReviewScene(rawValue: scene))
         }
-        let width = Double(environment["BROWSERDADDY_UI_REVIEW_WIDTH"] ?? "1000") ?? 1_000
-        XCTAssertTrue((480...1_600).contains(width))
+        let width = Double(environment["BROWSERDADDY_UI_REVIEW_WIDTH"] ?? "1240") ?? 1_240
+        XCTAssertTrue((920...1_600).contains(width))
+        let height = Double(environment["BROWSERDADDY_UI_REVIEW_HEIGHT"] ?? "800") ?? 800
+        XCTAssertTrue((620...1_200).contains(height))
+        let fontURL = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("SaaSMakerUI_SaaSMakerUI.bundle")
+        XCTAssertTrue(BrowserUIResources.registerFonts(in: Bundle(url: fontURL)))
         let host = NSHostingView(rootView: UIReviewHost(model: model, controller: controller, state: state)
             .browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary)))
-        let window = NSWindow(contentRect: NSRect(x: 200, y: 100, width: width, height: 800),
+        let window = NSWindow(contentRect: NSRect(x: 200, y: 100, width: width, height: height),
                               styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
-        window.title = "BrowserDaddy UI fixture · isolated production views"
+        window.title = "BrowserDaddy · Direction A fixture"
         window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 480, height: 480)
+        window.contentMinSize = NSSize(width: 920, height: 620)
         window.contentView = host
         NSApplication.shared.setActivationPolicy(.regular)
-        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
         defer { window.orderOut(nil) }
         try await Task.sleep(for: .milliseconds(200))
         host.layoutSubtreeIfNeeded()
         let ready: [String: Any] = [
             "windowTitle": window.title,
             "fixture": true,
-            "viewContentOnly": true,
+            "viewContentOnly": false,
+            "logicalContentWidth": width,
+            "logicalContentHeight": height,
+            "nativeWindowNumber": window.windowNumber,
+            "processIdentifier": ProcessInfo.processInfo.processIdentifier,
+            "nativeWindowWidth": window.frame.width,
+            "nativeWindowHeight": window.frame.height,
+            "nativeContentWidth": host.bounds.width,
+            "nativeContentHeight": host.bounds.height,
             "scenes": UIReviewScene.allCases.map(\.rawValue),
             "doneFile": doneURL.path,
             "readOnlyScenes": UIReviewScene.allCases.map(\.rawValue),
-            "note": "All production scenes are disabled for screenshot review. Their controls cannot open URLs, write the clipboard, request OS access, change login, request notifications or trigger external tagging. The scene picker remains available."
+            "note": "Production content, Sync and About are disabled for screenshot review. Sidebar navigation is available and changes only the fixture workspace. No content control may open URLs, write the clipboard, request access, change login, request notifications or trigger external tagging."
         ]
         try JSONSerialization.data(withJSONObject: ready, options: [.prettyPrinted, .sortedKeys])
             .write(to: outputURL.appendingPathComponent("ready.json"), options: .atomic)
-        for _ in 0..<1_200 {
-            if FileManager.default.fileExists(atPath: doneURL.path) { break }
-            let snapshot: [String: Any] = [
-                "scene": state.scene.rawValue,
-                "search": model.searchTerm,
-                "historyRows": model.historyRows.count,
-                "blockingReady": controller.ready,
-                "nativePreferencesLoads": blockingPreferences.loadCount,
-                "nativePreferencesApplies": blockingPreferences.applyCount
-            ]
-            try JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys])
-                .write(to: outputURL.appendingPathComponent("state.json"), options: .atomic)
-            try await Task.sleep(for: .milliseconds(100))
+        let started = Date()
+        var writeError: Error?
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                if FileManager.default.fileExists(atPath: doneURL.path)
+                    || Date().timeIntervalSince(started) >= 120 {
+                    NSApplication.shared.stop(nil)
+                    if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero,
+                        modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                        context: nil, subtype: 0, data1: 0, data2: 0) {
+                        NSApplication.shared.postEvent(event, atStart: false)
+                    }
+                    return
+                }
+                let snapshot: [String: Any] = [
+                    "initialScene": state.scene.rawValue,
+                    "search": model.searchTerm,
+                    "historyRows": model.historyRows.count,
+                    "blockingReady": controller.ready,
+                    "nativePreferencesLoads": blockingPreferences.loadCount,
+                    "nativePreferencesApplies": blockingPreferences.applyCount,
+                    "nativeWindowWidth": window.frame.width,
+                    "nativeWindowHeight": window.frame.height,
+                    "nativeContentWidth": host.bounds.width,
+                    "nativeContentHeight": host.bounds.height
+                ]
+                do {
+                    try JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys])
+                        .write(to: outputURL.appendingPathComponent("state.json"), options: .atomic)
+                } catch { writeError = error }
+            }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        NSApplication.shared.run()
+        timer.invalidate()
+        if let writeError { throw writeError }
         XCTAssertEqual(blockingPreferences.loadCount, 0)
         XCTAssertEqual(blockingPreferences.applyCount, 0)
         XCTAssertFalse(controller.enabled)
@@ -126,7 +166,9 @@ private final class FixtureBlockingPreferences: BlockingPreferences {
 
 private enum UIReviewScene: String, CaseIterable, Identifiable {
     case history = "History", blocking = "Blocking", alerts = "Alerts", permissions = "Permissions"
+    case attention = "Attention", tabs = "Tabs", dashboard = "Dashboard", router = "Router"
     var id: Self { self }
+    var workspace: Workspace? { Workspace(rawValue: rawValue) }
 }
 
 @MainActor
@@ -141,27 +183,16 @@ private struct UIReviewHost: View {
     @StateObject private var protection = ProtectionCheckModel(networkAllowed: false)
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text("Temporary fixtures · collection and filter inactive")
-                    .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
-                Spacer()
-                Picker("Review screen", selection: $state.scene) {
-                    ForEach(UIReviewScene.allCases) { scene in Text(scene.rawValue).tag(scene) }
-                }.frame(width: 220)
-            }.padding(12)
-            Divider().overlay(BrowserTheme.divider)
-            Group {
-                switch state.scene {
-                case .history: HistoryView()
-                case .blocking: BlockingView(controller: controller, protectionCheck: protection)
-                case .alerts: AlertSettingsView().padding(24).frame(maxWidth: 480)
-                case .permissions: PermissionsView()
-                }
+        Group {
+            if state.scene == .alerts {
+                AlertSettingsView().padding(30).frame(maxWidth: 520).disabled(true)
+            } else {
+                RootView(reviewWorkspace: state.scene.workspace ?? .history, blockingController: controller,
+                         protectionCheck: protection)
             }
-            .disabled(true)
-            .environmentObject(model)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .environmentObject(model)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .smWorkspaceWindowChrome()
     }
 }

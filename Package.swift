@@ -15,7 +15,7 @@ let package = Package(
         .library(name: "BrowserCore", targets: ["BrowserCore"]),
         .executable(name: "BrowserDaddy", targets: ["BrowserDaddy"]),
     ],
-    dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"), .package(url: "https://github.com/sass-maker/ui-library", exact: "0.1.34")],
+    dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"), .package(url: "https://github.com/sass-maker/ui-library", revision: "f45faf3eb04af08cff2022710c8b8157a60bf5fa")],
     targets: [
         .target(name: "BrowserCore"),
         .executableTarget(

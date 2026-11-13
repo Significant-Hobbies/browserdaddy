@@ -17,8 +17,8 @@ struct PermissionsView: View {
                 tagging
                 data
             }
-            .padding(28)
-            .frame(maxWidth: 1_040)
+            .padding(.horizontal, 30).padding(.top, 30).padding(.bottom, 40)
+            .frame(maxWidth: 1_200)
             .frame(maxWidth: .infinity)
         }
         .onAppear { model.refreshPermissions() }

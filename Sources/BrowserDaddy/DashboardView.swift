@@ -37,8 +37,8 @@ struct DashboardView: View {
                     sessions(r)
                     searches(r)
                 }
-                .padding(28)
-                .frame(maxWidth: 1_040)
+                .padding(.horizontal, 30).padding(.top, 30).padding(.bottom, 40)
+                .frame(maxWidth: 1_200)
                 .frame(maxWidth: .infinity)
             } else {
                 emptyState
@@ -49,23 +49,25 @@ struct DashboardView: View {
     // MARK: - headline
 
     private func verdict(_ r: ReportEngine.Report) -> some View {
-        HStack(alignment: .top, spacing: 18) {
-            DaddyArtwork(brand: true).frame(width: 52, height: 52)
-            VStack(alignment: .leading, spacing: 7) {
-                SMSectionHeader("\(r.totalVisits.formatted()) visits archived", size: 26)
-                    .accessibilityAddTraits(.isHeader)
-                Text("\(r.uniqueURLs.formatted()) unique URLs across "
-                     + "\(r.uniqueDomains.formatted()) domains")
-                    .foregroundStyle(BrowserTheme.secondaryInk)
-                Label(rangeText(r), systemImage: "archivebox")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(BrowserTheme.secondaryInk)
+        VStack(alignment: .leading, spacing: 22) {
+            Label(rangeText(r), systemImage: "archivebox")
+                .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+            HStack(alignment: .top, spacing: 32) {
+                archiveMetric(r.totalVisits.formatted(), label: "Visits archived")
+                archiveMetric(r.uniqueURLs.formatted(), label: "Unique pages")
+                archiveMetric(r.uniqueDomains.formatted(), label: "Domains")
             }
-            Spacer()
         }
-        .padding(20)
-        .background(BrowserTheme.palette.brandSoft, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(BrowserTheme.divider))
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func archiveMetric(_ value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(value).font(.custom(BrowserTheme.palette.sansFont, size: 29).weight(.semibold))
+                .tracking(-0.7).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            Text(label).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func rangeText(_ r: ReportEngine.Report) -> String {
