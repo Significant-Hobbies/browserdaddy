@@ -70,7 +70,7 @@ struct BrowserWorkspaceChrome<Content: View, Footer: View>: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .background(BrowserTheme.palette.background)
-        .background(SMWorkspaceWindowChrome())
+        .smWorkspaceWindowChrome()
         .containerBackground(BrowserTheme.palette.background, for: .window)
     }
 

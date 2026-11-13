@@ -303,9 +303,9 @@ struct BrowserDaddyApp: App {
                 }
             }
             .padding(24).frame(width: 480)
+            .smWorkspaceWindowChrome()
             .browserTheme(BrowserTheme.palette)
             .buttonStyle(SMMacButtonStyle(.secondary))
-            .background(SMWorkspaceWindowChrome().environment(\.smPalette, BrowserTheme.palette))
         }
     }
 
@@ -324,7 +324,8 @@ struct BrowserDaddyApp: App {
                 }
             }
             .frame(minWidth: 920, minHeight: 620)
-            .background(SMWorkspaceWindowChrome().environment(\.smPalette, BrowserTheme.palette))
+            .smWorkspaceWindowChrome()
+            .browserTheme(BrowserTheme.palette)
             .onAppear { BrowserStartupCheck.windowAppeared() }
         }
         .defaultSize(width: 1240, height: 800)
@@ -410,9 +411,8 @@ struct RootView: View {
             }
         }
         .buttonStyle(SMMacButtonStyle(.secondary))
+        .smWorkspaceWindowChrome()
         .browserTheme(BrowserTheme.palette)
-        .toolbarBackground(BrowserTheme.palette.background, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
         .sheet(isPresented: $model.showAbout) {
             about.browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary))
         }

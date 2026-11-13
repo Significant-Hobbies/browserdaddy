@@ -193,6 +193,6 @@ private struct UIReviewHost: View {
         }
         .environmentObject(model)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SMWorkspaceWindowChrome())
+        .smWorkspaceWindowChrome()
     }
 }
