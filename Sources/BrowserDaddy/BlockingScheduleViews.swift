@@ -285,8 +285,7 @@ struct BlockingScheduleSheet: View {
                     .keyboardShortcut(.cancelAction)
                     .disabled(submission.isSaving)
                 Button("Add schedule", action: save)
-                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
-                    .opacity(canSave ? 1 : 0.4)
+                    .buttonStyle(SMMacButtonStyle(.primary))
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
                     .accessibilityLabel("Save new schedule")
@@ -296,7 +295,7 @@ struct BlockingScheduleSheet: View {
         .frame(minWidth: 540, idealWidth: 580, minHeight: 620, idealHeight: 680)
         .background(BrowserTheme.palette.background)
         .browserTheme(BrowserTheme.palette)
-        .buttonStyle(SMButtonStyle(.outline, size: .compact))
+        .buttonStyle(SMMacButtonStyle(.secondary))
         .interactiveDismissDisabled(submission.isSaving)
         .onAppear { websiteFocused = true }
         .onChange(of: controller.configuration.scheduledSites) { _, _ in resolveSave() }

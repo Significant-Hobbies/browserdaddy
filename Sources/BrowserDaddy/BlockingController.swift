@@ -148,7 +148,7 @@ final class BlockingPreferenceQueue {
 }
 
 @MainActor
-private final class SystemBlockingPreferences: BlockingPreferences {
+final class SystemBlockingPreferences: BlockingPreferences {
     private let manager = NEFilterManager.shared()
     private let queue = BlockingPreferenceQueue()
 

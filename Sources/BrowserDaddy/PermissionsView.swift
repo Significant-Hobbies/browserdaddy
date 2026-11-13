@@ -53,25 +53,19 @@ struct PermissionsView: View {
     }
 
     private func browserRow(_ status: BrowserAccessStatus) -> some View {
-        HStack(spacing: 10) {
+        SMResourceRow(status.kind.displayName, subtitle: accessLabel(status), systemImage: "folder") {
             Circle().fill(accessColor(status.state)).frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(status.kind.displayName).font(.callout.weight(.semibold))
-                    .foregroundStyle(BrowserTheme.ink)
-                Text(accessLabel(status)).font(.caption)
-                    .foregroundStyle(BrowserTheme.secondaryInk)
-                    .lineLimit(1).truncationMode(.middle)
-                    .help(accessLabel(status))
-            }
-            Spacer()
-            Button(accessButtonTitle(status.state)) {
-                model.connectBrowser(status.kind)
-            }.textCase(.lowercase)
-            if case .connected = status.state {
-                Button("Disconnect") { model.removeBrowser(status.kind) }.textCase(.lowercase)
+                .accessibilityHidden(true)
+        } trailing: {
+            HStack(spacing: 8) {
+                Button(accessButtonTitle(status.state)) {
+                    model.connectBrowser(status.kind)
+                }.textCase(.lowercase)
+                if case .connected = status.state {
+                    Button("Disconnect") { model.removeBrowser(status.kind) }.textCase(.lowercase)
+                }
             }
         }
-        .padding(.vertical, 2)
     }
 
     private var automation: some View {
@@ -137,7 +131,7 @@ struct PermissionsView: View {
                     Button(model.extracting ? "Syncing…" : "Sync history now") {
                         model.runExtract()
                     }.textCase(.lowercase)
-                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.primary))
                     .disabled(model.extracting)
                     if model.extracting { ProgressView().controlSize(.small) }
                 }
@@ -175,7 +169,7 @@ struct PermissionsView: View {
                         model.runClassification()
                     }.textCase(.lowercase)
                     .disabled(model.classifying || !model.classifyOptin)
-                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.primary))
                     if model.classifying {
                         ProgressView().controlSize(.small)
                     }

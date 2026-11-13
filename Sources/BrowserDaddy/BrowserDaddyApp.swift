@@ -165,7 +165,7 @@ private struct BrowserDaddyContent: View {
     var body: some View {
         Group {
             if model.needsOnboarding {
-                OnboardingView().browserTheme(BrowserTheme.palette).buttonStyle(SMButtonStyle(.outline, size: .compact))
+                OnboardingView().browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary))
             } else { RootView() }
         }
         .environmentObject(model)
@@ -304,7 +304,7 @@ struct BrowserDaddyApp: App {
             }
             .padding(24).frame(width: 480)
             .browserTheme(BrowserTheme.palette)
-            .buttonStyle(SMButtonStyle(.outline, size: .compact))
+            .buttonStyle(SMMacButtonStyle(.secondary))
         }
     }
 
@@ -416,7 +416,7 @@ struct RootView: View {
                         statusBar
                     }
                 }
-                .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                .buttonStyle(SMMacButtonStyle(.secondary))
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .browserTheme(BrowserTheme.palette)
@@ -430,13 +430,13 @@ struct RootView: View {
                         } label: {
                             Label(model.extracting ? "Syncing…" : "Sync History", systemImage: "arrow.triangle.2.circlepath")
                         }
-                        .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                        .buttonStyle(SMMacButtonStyle(.secondary))
                         .disabled(model.extracting)
                     }
                 }
             }
             .sheet(isPresented: $model.showAbout) {
-                about.browserTheme(BrowserTheme.palette).buttonStyle(SMButtonStyle(.outline, size: .compact))
+                about.browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary))
             }
         }
     }
@@ -503,7 +503,7 @@ struct RootView: View {
             Text("Your archive stays on this Mac. Optional topic tagging sends selected browsing text to classifier.dev with your consent.")
                 .font(.callout).foregroundStyle(BrowserTheme.mintInk)
             Button("Done") { model.showAbout = false }.textCase(.lowercase)
-                .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                .buttonStyle(SMMacButtonStyle(.primary))
         }
         .padding(32).frame(width: 340).background(Color.black)
     }

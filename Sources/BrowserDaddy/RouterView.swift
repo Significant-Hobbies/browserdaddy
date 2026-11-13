@@ -69,7 +69,7 @@ struct RouterView: View {
                                 changingDefault = false
                             }
                         }.textCase(.lowercase)
-                        .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                        .buttonStyle(SMMacButtonStyle(.primary))
                         .disabled(changingDefault)
                     }
                 }

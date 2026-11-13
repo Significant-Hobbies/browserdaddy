@@ -29,16 +29,8 @@ struct HistoryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 16) {
             BrowserPageHeader(title: "History", subtitle: "Find a page across your connected browsers.", icon: "clock.arrow.circlepath")
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(BrowserTheme.secondaryInk)
-                TextField("Search URLs and titles…", text: $model.searchTerm)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12).frame(height: 36)
-                    .background(Color.black)
-                    .overlay(RoundedRectangle(cornerRadius: 6)
-                        .stroke(BrowserTheme.divider, lineWidth: 1))
-                    .accessibilityLabel("Search archived history")
-            }
+            SMSearchField("Search URLs and titles…", text: $model.searchTerm,
+                          accessibilityLabel: "Search archived history")
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { filterControls }
                 VStack(alignment: .leading, spacing: 8) {
@@ -120,7 +112,7 @@ struct HistoryView: View {
     @ViewBuilder private var clearFilters: some View {
         if model.historyActiveFilterCount > 0 {
             Button("Clear") { model.clearHistoryFilters() }.textCase(.lowercase)
-                .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                .buttonStyle(SMMacButtonStyle(.secondary))
                 .help("Clear all history filters; search text stays in place")
         }
     }
@@ -203,13 +195,13 @@ struct HistoryView: View {
                     Label("Journey", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
                         .textCase(.lowercase)
                 }
-                .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                .buttonStyle(SMMacButtonStyle(.primary))
                 Button { tagTarget = row } label: { Label("Retag", systemImage: "tag").textCase(.lowercase) }
-                    .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.secondary))
                 Button { copy(row.url) } label: { Label("Copy URL", systemImage: "doc.on.doc").textCase(.lowercase) }
-                    .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.secondary))
                 Button { open(row.url) } label: { Label("Open", systemImage: "arrow.up.right.square").textCase(.lowercase) }
-                    .buttonStyle(SMButtonStyle(.outline, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.secondary))
                 Spacer()
                 Text("Local archive evidence")
                     .font(.caption2).foregroundStyle(.tertiary)
@@ -250,7 +242,7 @@ struct HistoryView: View {
                 .font(.callout).foregroundStyle(BrowserTheme.secondaryInk)
             if model.historyActiveFilterCount > 0 {
                 Button("Clear filters") { model.clearHistoryFilters() }.textCase(.lowercase)
-                    .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                    .buttonStyle(SMMacButtonStyle(.primary))
             }
             Spacer()
         }
@@ -304,7 +296,7 @@ private struct NavigationTreeSheet: View {
                         .font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
                 }
                 Spacer()
-                Button("Done") { dismiss() }.buttonStyle(SMButtonStyle(.outline, size: .compact))
+                Button("Done") { dismiss() }.buttonStyle(SMMacButtonStyle(.secondary))
             }
             .padding(22)
             Divider().overlay(BrowserTheme.mintInk.opacity(0.18))
@@ -462,13 +454,13 @@ private struct HistoryTagSheet: View {
             HStack {
                 Button("Clear this scope") {
                     if model.clearHistoryTag(row, scope: scope) { dismiss() }
-                }.textCase(.lowercase).buttonStyle(SMButtonStyle(.outline, size: .compact))
+                }.textCase(.lowercase).buttonStyle(SMMacButtonStyle(.secondary))
                     .help("Remove only the derived tag at this scope; visits remain archived")
                 Spacer()
-                Button("Cancel") { dismiss() }.textCase(.lowercase).buttonStyle(SMButtonStyle(.outline, size: .compact))
+                Button("Cancel") { dismiss() }.textCase(.lowercase).buttonStyle(SMMacButtonStyle(.secondary))
                 Button("Save local tag") {
                     if model.setHistoryTag(row, scope: scope, category: category) { dismiss() }
-                }.textCase(.lowercase).buttonStyle(SMButtonStyle(.brand, size: .compact))
+                }.textCase(.lowercase).buttonStyle(SMMacButtonStyle(.primary))
             }
             Text(model.classifyOptin
                  ? "Optional external classification is enabled separately. It only runs when you choose Tag in Permissions."

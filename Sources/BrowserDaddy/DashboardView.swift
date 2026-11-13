@@ -713,7 +713,7 @@ struct DashboardView: View {
             }
             Button(model.extracting ? "Syncing…" : "Sync History",
                    action: model.runExtract)
-                .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                .buttonStyle(SMMacButtonStyle(.primary))
                 .disabled(model.extracting)
             if let last = model.extractLog.last {
                 Text(last)

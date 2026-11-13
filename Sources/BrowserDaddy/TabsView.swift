@@ -91,7 +91,7 @@ struct TabsView: View {
                     model.tabSelection = []
                 }
                 .textCase(.lowercase)
-                .buttonStyle(SMButtonStyle(.brand, size: .compact))
+                .buttonStyle(SMMacButtonStyle(.primary))
             }
             if model.tabsRefreshing {
                 ProgressView().controlSize(.small)
