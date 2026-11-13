@@ -6,9 +6,8 @@ import { fileURLToPath } from 'node:url';
 // A real native workload for tooling that supports node:test but not SwiftPM.
 // XcodeBuildMCP remains the native executor. Never launch the app, capture host
 // or opt-in installed-preferences probe from this automatic verification path.
-test('native UI behavior contracts through XcodeBuildMCP', { timeout: 115_000 }, () => {
+function verifyNativeContracts(filter, minimumPassed) {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const filter = 'HistoryModelTests|BlockingSchedulePresentationTests|BlockingControllerTests|CollectionConsentTests|BrowserUIResourcesTests|SharedMacUIReviewTests';
   const result = spawnSync('npx', ['--offline', 'xcodebuildmcp', 'swift-package', 'test',
     '--package-path', root, '--configuration', 'release', '--filter', filter], {
     cwd: root,
@@ -20,6 +19,14 @@ test('native UI behavior contracts through XcodeBuildMCP', { timeout: 115_000 },
   assert.ifError(result.error);
   assert.equal(result.status, 0, 'The official native test command must pass');
   const summary = result.stdout.match(/(\d+) tests? passed, 0 failed, 1 skipped/);
-  assert.ok(summary && Number(summary[1]) >= 48,
+  assert.ok(summary && Number(summary[1]) >= minimumPassed,
     'Require the selected native contracts and default-skipped capture host; an empty filter is not verification');
+}
+
+test('native UI behavior contracts through XcodeBuildMCP', { timeout: 115_000 }, () => {
+  verifyNativeContracts('HistoryModelTests|BlockingSchedulePresentationTests|BlockingControllerTests|CollectionConsentTests|BrowserUIResourcesTests|SharedMacUIReviewTests', 48);
+});
+
+test('native history provenance contracts through XcodeBuildMCP', { timeout: 115_000 }, () => {
+  verifyNativeContracts('HistoryModelTests|BrowserUIResourcesTests|SharedMacUIReviewTests', 4);
 });
