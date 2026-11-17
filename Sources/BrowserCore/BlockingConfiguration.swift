@@ -193,20 +193,23 @@ public struct CommittedBlockingRules: Sendable, Equatable {
     public static let protectedSites = Set(["youtube.com", "youtu.be", "youtube-nocookie.com", "reddit.com", "redd.it", "instagram.com"].map { BlockingHostname($0)! })
     public let configuration: BlockingConfiguration
 
-    public init(preserving configurations: [BlockingConfiguration] = [], catalog: BlockingListCatalog = .main) throws {
+    public init(local: BlockingConfiguration? = nil, preserving configurations: [BlockingConfiguration] = [],
+                catalog: BlockingListCatalog = .main) throws {
         var result = BlockingConfiguration()
         result.categories = Set(BlockingCategory.allCases)
         result.sites = Self.protectedSites
         for category in BlockingCategory.allCases {
             result.lists[category] = try catalog.resolve(category, sha256: BlockingListCatalog.rawDigests[category]!)
         }
-        for previous in configurations {
-            if let sites = previous.replacedSites { result.replacedSites = (result.replacedSites ?? []).union(sites) }
-            if let schedules = previous.replacedSchedules {
-                result.replacedSchedules = (result.replacedSchedules ?? []).union(schedules)
-            }
-            Self.merge(previous, into: &result)
+        if let local {
+            Self.merge(local, into: &result)
+            // An explicit restore in the local file takes precedence over an older replacement.
+            let replacedSites = (local.replacedSites ?? []).subtracting(result.sites)
+            let replacedSchedules = (local.replacedSchedules ?? []).subtracting(result.scheduledSites)
+            result.replacedSites = replacedSites.isEmpty ? nil : replacedSites
+            result.replacedSchedules = replacedSchedules.isEmpty ? nil : replacedSchedules
         }
+        for previous in configurations { Self.merge(previous, into: &result) }
         configuration = result
     }
 
@@ -241,14 +244,12 @@ public struct CommittedBlockingRules: Sendable, Equatable {
     }
 
     private static func merge(_ previous: BlockingConfiguration, into result: inout BlockingConfiguration) {
-        result.sites.formUnion(previous.sites)
-        result.scheduledSites.formUnion(previous.scheduledSites)
+        var sites = previous.sites
         for category in previous.categories {
-            result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
+            sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
         }
-        result.sites.subtract(result.replacedSites ?? [])
-        result.sites.formUnion(protectedSites)
-        result.scheduledSites.subtract(result.replacedSchedules ?? [])
+        result.sites.formUnion(sites.subtracting(result.replacedSites ?? []))
+        result.scheduledSites.formUnion(previous.scheduledSites.subtracting(result.replacedSchedules ?? []))
     }
 
     public func replacingSite(_ original: BlockingHostname, with replacement: BlockingHostname) throws -> Self {

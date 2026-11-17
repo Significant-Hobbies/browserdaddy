@@ -116,6 +116,12 @@ final class BlockingControllerTests: XCTestCase {
             extensionAvailable: true, extensionActivation: { $0() })
         try await waitUntil { reopened.ready && !reopened.busy }
         XCTAssertEqual(reopened.configuration, saved)
+        let editedBytes = try Data(contentsOf: file)
+        XCTAssertTrue(reopened.editScheduledSite(oldSchedule, replacement: sibling))
+        try await waitUntil { !reopened.busy }
+        XCTAssertTrue(reopened.error.contains("changed while you were editing"))
+        XCTAssertEqual(try Data(contentsOf: file), editedBytes)
+        XCTAssertEqual(preferences.applyCount, 0)
         reopened.enable()
         try await waitUntil { preferences.applyCount == 1 && !reopened.busy }
         let applied = try BlockingConfiguration.decodeProvider(XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
@@ -128,6 +134,26 @@ final class BlockingControllerTests: XCTestCase {
         try await waitUntil { preferences.applyCount == 3 && !reopened.busy }
         XCTAssertTrue(reopened.configuration.sites.contains(oldHost))
         XCTAssertTrue(reopened.configuration.scheduledSites.contains(oldSchedule))
+    }
+
+    func testExplicitLocalRestoreTakesPrecedenceOverPreviousEdits() throws {
+        let original = BlockingHostname("original.test")!
+        let replacement = BlockingHostname("replacement.test")!
+        let oldSchedule = ScheduledSiteBlock(hostname: original, weekdays: [2], startMinute: 60, endMinute: 120)!
+        let newSchedule = ScheduledSiteBlock(hostname: replacement, weekdays: [3], startMinute: 60, endMinute: 120)!
+        let edited = try CommittedBlockingRules(catalog: Self.catalog)
+            .addingSite(original).addingScheduledSite(oldSchedule)
+            .replacingSite(original, with: replacement).replacingScheduledSite(oldSchedule, with: newSchedule)
+        var local = try BlockingConfiguration.decode(edited.configuration.localData())
+        local.sites.insert(original)
+        local.scheduledSites.insert(oldSchedule)
+        let restored = try CommittedBlockingRules(local: local, catalog: Self.catalog)
+        XCTAssertEqual(restored.configuration.sites, CommittedBlockingRules.protectedSites.union([original, replacement]))
+        XCTAssertEqual(restored.configuration.scheduledSites, [oldSchedule, newSchedule])
+        let expected = try CommittedBlockingRules(catalog: Self.catalog)
+            .addingSite(original).addingSite(replacement)
+            .addingScheduledSite(oldSchedule).addingScheduledSite(newSchedule)
+        XCTAssertEqual(restored, expected)
     }
 
     @MainActor

@@ -253,13 +253,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 enabled = state.enabled
                 let loaded = try await Task.detached(priority: .userInitiated) {
                     guard let url else { throw CocoaError(.fileNoSuchFile) }
-                    var previous: [BlockingConfiguration] = []
-                    if FileManager.default.fileExists(atPath: url.path) {
-                        previous.append(try BlockingConfiguration.load(from: url))
-                    }
+                    let local = FileManager.default.fileExists(atPath: url.path)
+                        ? try BlockingConfiguration.load(from: url) : nil
                     let (native, warning, incomplete) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
-                    if let native { previous.append(native) }
-                    let rules = try CommittedBlockingRules(preserving: previous, catalog: Self.bundledListCatalog)
+                    let rules = try CommittedBlockingRules(local: local, preserving: native.map { [$0] } ?? [],
+                        catalog: Self.bundledListCatalog)
                     let payload = try rules.providerPayload()
                     if !warning.isEmpty { try state.preserveNativeRecovery(beside: url, incomplete: incomplete) }
                     let note = try BlockingFilterState.incompleteRecoveryNote(beside: url)
