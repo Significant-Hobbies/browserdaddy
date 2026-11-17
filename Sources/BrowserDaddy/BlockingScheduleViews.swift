@@ -11,7 +11,8 @@ struct BlockingScheduleGroup: Identifiable {
     }
 
     let window: Window
-    let hosts: [String]
+    let schedules: [ScheduledSiteBlock]
+    var hosts: [String] { schedules.map(\.hostname.value) }
     var id: Window { window }
     var blockedMinutes: Int { (window.endMinute - window.startMinute + 1440) % 1440 }
     var availableMinutes: Int { 1440 - blockedMinutes }
@@ -40,7 +41,7 @@ struct BlockingScheduleGroup: Identifiable {
     static func grouping(_ schedules: Set<ScheduledSiteBlock>) -> [Self] {
         Dictionary(grouping: schedules) {
             Window(weekdays: $0.weekdays, startMinute: $0.startMinute, endMinute: $0.endMinute)
-        }.map { Self(window: $0.key, hosts: $0.value.map(\.hostname.value).sorted()) }
+        }.map { Self(window: $0.key, schedules: $0.value.sorted { $0.hostname.value < $1.hostname.value }) }
             .sorted {
                 if $0.hosts != $1.hosts { return $0.hosts.lexicographicallyPrecedes($1.hosts) }
                 if $0.window.weekdays != $1.window.weekdays {
@@ -70,8 +71,21 @@ struct BlockingScheduleGroup: Identifiable {
 struct BlockingScheduleDraft {
     var website = ""
     var weekdays: Set<Int> = Set(1...7)
-    var start = Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: 10))!
-    var end = Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: 0))!
+    var start = Self.date(at: 600)
+    var end = Self.date(at: 0)
+
+    init(schedule: ScheduledSiteBlock? = nil) {
+        guard let schedule else { return }
+        website = schedule.hostname.value
+        weekdays = schedule.weekdays
+        start = Self.date(at: schedule.startMinute)
+        end = Self.date(at: schedule.endMinute)
+    }
+
+    private static func date(at minute: Int) -> Date {
+        Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1,
+            hour: minute / 60, minute: minute % 60))!
+    }
 
     var startMinute: Int { minute(start) }
     var endMinute: Int { minute(end) }
@@ -103,6 +117,8 @@ struct BlockingScheduleDraft {
 
 struct BlockingScheduleCard: View {
     let group: BlockingScheduleGroup
+    let editingEnabled: Bool
+    let edit: (ScheduledSiteBlock) -> Void
 
     var body: some View {
         SMCard {
@@ -115,7 +131,7 @@ struct BlockingScheduleCard: View {
                     Text(group.hosts.joined(separator: " · "))
                         .font(.headline).textSelection(.enabled)
                     Spacer(minLength: 12)
-                    SMStatusPill("Saved", tone: .neutral).accessibilityLabel("Saved schedule")
+                    editAction.disabled(!editingEnabled)
                 }
                 Divider().padding(.vertical, 4)
                 HStack(alignment: .top, spacing: 20) {
@@ -139,6 +155,20 @@ struct BlockingScheduleCard: View {
                         .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var editAction: some View {
+        if group.schedules.count == 1, let schedule = group.schedules.first {
+            Button("Edit") { edit(schedule) }
+                .accessibilityLabel("Edit schedule for \(schedule.hostname.value)")
+        } else {
+            Menu("Edit") {
+                ForEach(group.schedules, id: \.self) { schedule in
+                    Button(schedule.hostname.value) { edit(schedule) }
+                }
+            }
+            .accessibilityLabel("Edit a website schedule")
         }
     }
 
@@ -167,9 +197,9 @@ struct BlockingScheduleCard: View {
     }
 }
 
-enum BlockingScheduleSubmission: Equatable {
+enum BlockingRuleSubmission<Rule: Hashable>: Equatable {
     case idle
-    case saving(ScheduledSiteBlock)
+    case saving(Rule)
     case failed(String)
 
     var isSaving: Bool {
@@ -182,40 +212,58 @@ enum BlockingScheduleSubmission: Equatable {
         return nil
     }
 
-    func canSubmit(_ schedule: ScheduledSiteBlock?, ready: Bool, busy: Bool, saved: Set<ScheduledSiteBlock>) -> Bool {
-        guard let schedule else { return false }
-        return ready && !busy && !isSaving && saved.count < ScheduledSiteBlock.maximumCount && !saved.contains(schedule)
-    }
-
-    mutating func resolve(saved: Set<ScheduledSiteBlock>, busy: Bool, error: String) -> Bool {
-        guard case .saving(let schedule) = self else { return false }
-        if saved.contains(schedule) {
+    mutating func resolve(saved: Set<Rule>, busy: Bool, error: String, replacing original: Rule? = nil) -> Bool {
+        guard case .saving(let rule) = self else { return false }
+        if saved.contains(rule), original.map({ !saved.contains($0) }) ?? true {
             self = .idle
             return true
         }
-        if !busy { self = .failed(error.isEmpty ? "The schedule was not saved. Your draft is ready to retry." : error) }
+        if !busy { self = .failed(error.isEmpty ? "The rule was not saved. Your draft is ready to retry." : error) }
         return false
+    }
+}
+
+typealias BlockingScheduleSubmission = BlockingRuleSubmission<ScheduledSiteBlock>
+
+extension BlockingScheduleSubmission {
+    func canSubmit(_ schedule: ScheduledSiteBlock?, ready: Bool, busy: Bool, saved: Set<ScheduledSiteBlock>,
+                   replacing original: ScheduledSiteBlock? = nil) -> Bool {
+        guard let schedule else { return false }
+        let hasRoom = original.map { saved.contains($0) } ?? (saved.count < ScheduledSiteBlock.maximumCount)
+        return ready && !busy && !isSaving && hasRoom && !saved.contains(schedule)
     }
 }
 
 struct BlockingScheduleSheet: View {
     @ObservedObject var controller: BlockingController
+    let original: ScheduledSiteBlock?
     @Environment(\.dismiss) private var dismiss
-    @State private var draft = BlockingScheduleDraft()
+    @State private var draft: BlockingScheduleDraft
     @State private var submission = BlockingScheduleSubmission.idle
     @FocusState private var websiteFocused: Bool
 
-    private var atLimit: Bool { controller.configuration.scheduledSites.count >= ScheduledSiteBlock.maximumCount }
-    private var alreadySaved: Bool { draft.schedule.map { controller.configuration.scheduledSites.contains($0) } ?? false }
+    init(controller: BlockingController, original: ScheduledSiteBlock? = nil) {
+        self.controller = controller
+        self.original = original
+        _draft = State(initialValue: BlockingScheduleDraft(schedule: original))
+    }
+
+    private var atLimit: Bool {
+        original == nil && controller.configuration.scheduledSites.count >= ScheduledSiteBlock.maximumCount
+    }
+    private var alreadySaved: Bool {
+        guard let schedule = draft.schedule, schedule != original else { return false }
+        return controller.configuration.scheduledSites.contains(schedule)
+    }
     private var canSave: Bool {
         submission.canSubmit(draft.schedule, ready: controller.ready, busy: controller.busy,
-                             saved: controller.configuration.scheduledSites)
+                             saved: controller.configuration.scheduledSites, replacing: original)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                SMSectionHeader("New schedule", size: 22)
+                SMSectionHeader(original == nil ? "New schedule" : "Edit schedule", size: 22)
                 Spacer()
             }.padding(24)
             Divider()
@@ -256,9 +304,10 @@ struct BlockingScheduleSheet: View {
                     .padding(.vertical, 4)
                 }
                 Section {
-                    Text("Saved rules are locked. Ask in Codex chat to change or remove a schedule.")
-                        .font(.caption).foregroundStyle(BrowserTheme.palette.mutedForeground)
-                    if let message = draft.validationMessage {
+                    if let original, !controller.configuration.scheduledSites.contains(original) {
+                        Text("This schedule changed. Reopen it to edit the latest version.")
+                            .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                    } else if let message = draft.validationMessage {
                         Text(message).font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                     } else if alreadySaved {
                         Text("This schedule is already saved.").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
@@ -284,11 +333,11 @@ struct BlockingScheduleSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(submission.isSaving)
-                Button("Add schedule", action: save)
+                Button(original == nil ? "Add schedule" : "Save changes", action: save)
                     .buttonStyle(SMMacButtonStyle(.primary))
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
-                    .accessibilityLabel("Save new schedule")
+                    .accessibilityLabel(original == nil ? "Save new schedule" : "Save schedule changes")
                     .accessibilityIdentifier("schedule-save")
             }.padding(20)
         }
@@ -305,7 +354,9 @@ struct BlockingScheduleSheet: View {
     private func save() {
         guard canSave, let schedule = draft.schedule else { return }
         submission = .saving(schedule)
-        if !controller.addScheduledSite(schedule) {
+        let accepted = original.map { controller.editScheduledSite($0, replacement: schedule) }
+            ?? controller.addScheduledSite(schedule)
+        if !accepted {
             submission = .failed(controller.error.isEmpty
                                  ? "The schedule could not be saved. Refresh the filter status and try again."
                                  : controller.error)
@@ -314,7 +365,7 @@ struct BlockingScheduleSheet: View {
 
     private func resolveSave() {
         if submission.resolve(saved: controller.configuration.scheduledSites,
-                              busy: controller.busy, error: controller.error) {
+                              busy: controller.busy, error: controller.error, replacing: original) {
             dismiss()
         }
     }

@@ -339,14 +339,22 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
             error = "Enter a domain such as example.com, without a path or scheme."
             return false
         }
-        return addRule { try $0.addingSite(host) }
+        return saveRuleChange { try $0.addingSite(host) }
     }
 
     func addScheduledSite(_ schedule: ScheduledSiteBlock) -> Bool {
-        addRule { try $0.addingScheduledSite(schedule) }
+        saveRuleChange { try $0.addingScheduledSite(schedule) }
     }
 
-    private func addRule(_ addition: @escaping @Sendable (CommittedBlockingRules) throws -> CommittedBlockingRules) -> Bool {
+    func editSite(_ original: BlockingHostname, replacement: BlockingHostname) -> Bool {
+        saveRuleChange { try $0.replacingSite(original, with: replacement) }
+    }
+
+    func editScheduledSite(_ original: ScheduledSiteBlock, replacement: ScheduledSiteBlock) -> Bool {
+        saveRuleChange { try $0.replacingScheduledSite(original, with: replacement) }
+    }
+
+    private func saveRuleChange(_ change: @escaping @Sendable (CommittedBlockingRules) throws -> CommittedBlockingRules) -> Bool {
         guard ready, !busy, let committed, let rulesURL else { return false }
         refreshGeneration &+= 1
         busy = true
@@ -356,7 +364,7 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
                 let value = try await Task.detached(priority: .userInitiated) {
                     let (previous, warning, incomplete) = try state.maintenanceRules(catalog: Self.bundledListCatalog)
                     let merged = try previous.map { try committed.preserving($0) } ?? committed
-                    let value = try addition(merged)
+                    let value = try change(merged)
                     let payload = try value.providerPayload()
                     if !warning.isEmpty { try state.preserveNativeRecovery(beside: rulesURL, incomplete: incomplete) }
                     let note = try BlockingFilterState.incompleteRecoveryNote(beside: rulesURL)

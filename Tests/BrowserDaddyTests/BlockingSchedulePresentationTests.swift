@@ -137,4 +137,21 @@ final class BlockingSchedulePresentationTests: XCTestCase {
         XCTAssertFalse(idle.canSubmit(requested, ready: true, busy: false, saved: full))
     }
 
+    func testEditingPrefillsExactRuleAndCanReplaceAtLimit() throws {
+        let original = schedule("site0.example", days: [2, 6], start: 1327, end: 83)
+        var draft = BlockingScheduleDraft(schedule: original)
+        XCTAssertEqual(draft.schedule, original)
+        draft.end = date(84)
+        let replacement = try XCTUnwrap(draft.schedule)
+        var full = Set((1..<ScheduledSiteBlock.maximumCount).map { schedule("site\($0).example") })
+        full.insert(original)
+        var submission = BlockingScheduleSubmission.idle
+        XCTAssertTrue(submission.canSubmit(replacement, ready: true, busy: false, saved: full, replacing: original))
+        XCTAssertFalse(submission.canSubmit(original, ready: true, busy: false, saved: full, replacing: original))
+        XCTAssertFalse(submission.canSubmit(replacement, ready: true, busy: false, saved: [], replacing: original))
+        submission = .saving(replacement)
+        XCTAssertFalse(submission.resolve(saved: [original, replacement], busy: true, error: "", replacing: original))
+        XCTAssertTrue(submission.resolve(saved: [replacement], busy: false, error: "", replacing: original))
+    }
+
 }

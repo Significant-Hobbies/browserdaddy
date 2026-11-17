@@ -84,6 +84,77 @@ final class BlockingControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testRuleEditsSurviveReloadAndApplyWithStaleNativeRules() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let oldHost = BlockingHostname("old.test")!
+        let newHost = BlockingHostname("new.test")!
+        let unrelatedHost = BlockingHostname("native-only.test")!
+        let oldSchedule = ScheduledSiteBlock(hostname: oldHost, weekdays: [2], startMinute: 617, endMinute: 0)!
+        let newSchedule = ScheduledSiteBlock(hostname: newHost, weekdays: [6, 7], startMinute: 1327, endMinute: 83)!
+        let sibling = ScheduledSiteBlock(hostname: unrelatedHost, weekdays: oldSchedule.weekdays,
+            startMinute: oldSchedule.startMinute, endMinute: oldSchedule.endMinute)!
+        var local = BlockingConfiguration()
+        local.sites = [oldHost]
+        local.scheduledSites = [oldSchedule, sibling]
+        try local.save(to: file)
+        var native = local
+        native.sites.insert(unrelatedHost)
+        let preferences = MemoryBlockingPreferences(state: BlockingFilterState(enabled: false, payload: try native.providerData()))
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences, extensionAvailable: true)
+        try await waitUntil { controller.ready && !controller.busy }
+        XCTAssertTrue(controller.editSite(oldHost, replacement: newHost))
+        try await waitUntil { !controller.busy }
+        XCTAssertTrue(controller.editScheduledSite(oldSchedule, replacement: newSchedule))
+        try await waitUntil { !controller.busy }
+        XCTAssertEqual(controller.configuration.sites, CommittedBlockingRules.protectedSites.union([newHost, unrelatedHost]))
+        XCTAssertEqual(controller.configuration.scheduledSites, [newSchedule, sibling])
+        XCTAssertEqual(preferences.applyCount, 0)
+        let saved = try BlockingConfiguration.load(from: file)
+
+        let reopened = BlockingController(rulesURL: file, preview: false, preferences: preferences,
+            extensionAvailable: true, extensionActivation: { $0() })
+        try await waitUntil { reopened.ready && !reopened.busy }
+        XCTAssertEqual(reopened.configuration, saved)
+        reopened.enable()
+        try await waitUntil { preferences.applyCount == 1 && !reopened.busy }
+        let applied = try BlockingConfiguration.decodeProvider(XCTUnwrap(preferences.state.payload), catalog: Self.catalog)
+        XCTAssertEqual(applied.sites, saved.sites)
+        XCTAssertEqual(applied.scheduledSites, saved.scheduledSites)
+
+        XCTAssertTrue(reopened.addSite(oldHost.value))
+        try await waitUntil { preferences.applyCount == 2 && !reopened.busy }
+        XCTAssertTrue(reopened.addScheduledSite(oldSchedule))
+        try await waitUntil { preferences.applyCount == 3 && !reopened.busy }
+        XCTAssertTrue(reopened.configuration.sites.contains(oldHost))
+        XCTAssertTrue(reopened.configuration.scheduledSites.contains(oldSchedule))
+    }
+
+    @MainActor
+    func testRejectedWebsiteEditsLeaveSavedAndNativeRulesUntouched() async throws {
+        let file = try rulesFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let original = BlockingHostname("original.test")!
+        let protected = BlockingHostname("youtube.com")!
+        var local = BlockingConfiguration()
+        local.sites = [original]
+        try local.save(to: file)
+        let preferences = MemoryBlockingPreferences()
+        let controller = BlockingController(rulesURL: file, preview: false, preferences: preferences, extensionAvailable: true)
+        try await waitUntil { controller.ready && !controller.busy }
+        let originalBytes = try Data(contentsOf: file)
+
+        XCTAssertTrue(controller.editSite(original, replacement: protected))
+        try await waitUntil { !controller.busy }
+        XCTAssertTrue(controller.error.contains("already saved"))
+        XCTAssertTrue(controller.editSite(protected, replacement: BlockingHostname("other.test")!))
+        try await waitUntil { !controller.busy }
+        XCTAssertTrue(controller.error.contains("built-in protection"))
+        XCTAssertEqual(try Data(contentsOf: file), originalBytes)
+        XCTAssertEqual(preferences.applyCount, 0)
+    }
+
+    @MainActor
     func testStaleV3RecoveryPreservesAllSchedulesAndExtrasWithVerifiedFloor() async throws {
         for enabled in [false, true] {
             let file = try rulesFile()

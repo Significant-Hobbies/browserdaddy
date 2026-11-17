@@ -17,11 +17,15 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
     public var categories: Set<BlockingCategory> = []
     public var lists: [BlockingCategory: Set<BlockingHostname>] = [:]
     public var strictUnknownDestinations = false
+    // Local only. A stale native snapshot can still contain rules replaced by the user.
+    fileprivate var replacedSites: Set<BlockingHostname>?
+    fileprivate var replacedSchedules: Set<ScheduledSiteBlock>?
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
         case version, sites, categories, lists, strictUnknownDestinations, scheduledSites
+        case replacedSites, replacedSchedules
     }
 
     public init(from decoder: Decoder) throws {
@@ -32,6 +36,8 @@ public struct BlockingConfiguration: Codable, Sendable, Equatable {
         lists = try values.decode([BlockingCategory: Set<BlockingHostname>].self, forKey: .lists)
         strictUnknownDestinations = try values.decodeIfPresent(Bool.self, forKey: .strictUnknownDestinations) ?? false
         scheduledSites = values.contains(.scheduledSites) ? try values.decode(Set<ScheduledSiteBlock>.self, forKey: .scheduledSites) : []
+        replacedSites = try values.decodeIfPresent(Set<BlockingHostname>.self, forKey: .replacedSites)
+        replacedSchedules = try values.decodeIfPresent(Set<ScheduledSiteBlock>.self, forKey: .replacedSchedules)
         guard (version == 1 && scheduledSites.isEmpty) || (version == 2 && !scheduledSites.isEmpty),
               scheduledSites.count <= ScheduledSiteBlock.maximumCount else { throw CocoaError(.fileReadCorruptFile) }
     }
@@ -195,11 +201,11 @@ public struct CommittedBlockingRules: Sendable, Equatable {
             result.lists[category] = try catalog.resolve(category, sha256: BlockingListCatalog.rawDigests[category]!)
         }
         for previous in configurations {
-            result.sites.formUnion(previous.sites)
-            result.scheduledSites.formUnion(previous.scheduledSites)
-            for category in previous.categories {
-                result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
+            if let sites = previous.replacedSites { result.replacedSites = (result.replacedSites ?? []).union(sites) }
+            if let schedules = previous.replacedSchedules {
+                result.replacedSchedules = (result.replacedSchedules ?? []).union(schedules)
             }
+            Self.merge(previous, into: &result)
         }
         configuration = result
     }
@@ -209,6 +215,8 @@ public struct CommittedBlockingRules: Sendable, Equatable {
     public func addingSite(_ site: BlockingHostname) throws -> Self {
         var result = configuration
         result.sites.insert(site)
+        result.replacedSites?.remove(site)
+        if result.replacedSites?.isEmpty == true { result.replacedSites = nil }
         let value = Self(configuration: result)
         _ = try value.providerPayload()
         return value
@@ -217,6 +225,8 @@ public struct CommittedBlockingRules: Sendable, Equatable {
     public func addingScheduledSite(_ schedule: ScheduledSiteBlock) throws -> Self {
         var result = configuration
         result.scheduledSites.insert(schedule)
+        result.replacedSchedules?.remove(schedule)
+        if result.replacedSchedules?.isEmpty == true { result.replacedSchedules = nil }
         let value = Self(configuration: result)
         _ = try value.providerPayload()
         return value
@@ -224,14 +234,38 @@ public struct CommittedBlockingRules: Sendable, Equatable {
 
     public func preserving(_ previous: BlockingConfiguration) throws -> Self {
         var result = configuration
+        Self.merge(previous, into: &result)
+        let value = Self(configuration: result)
+        _ = try value.providerPayload()
+        return value
+    }
+
+    private static func merge(_ previous: BlockingConfiguration, into result: inout BlockingConfiguration) {
         result.sites.formUnion(previous.sites)
         result.scheduledSites.formUnion(previous.scheduledSites)
         for category in previous.categories {
             result.sites.formUnion((previous.lists[category] ?? []).subtracting(result.lists[category] ?? []))
         }
-        let value = Self(configuration: result)
-        _ = try value.providerPayload()
-        return value
+        result.sites.subtract(result.replacedSites ?? [])
+        result.sites.formUnion(protectedSites)
+        result.scheduledSites.subtract(result.replacedSchedules ?? [])
+    }
+
+    public func replacingSite(_ original: BlockingHostname, with replacement: BlockingHostname) throws -> Self {
+        guard !Self.protectedSites.contains(original) else { throw BlockingEditError.protectedWebsite }
+        var result = configuration
+        guard result.sites.remove(original) != nil else { throw BlockingEditError.missingRule }
+        guard original != replacement, !result.sites.contains(replacement) else { throw BlockingEditError.duplicateRule }
+        result.replacedSites = (result.replacedSites ?? []).union([original])
+        return try Self(configuration: result).addingSite(replacement)
+    }
+
+    public func replacingScheduledSite(_ original: ScheduledSiteBlock, with replacement: ScheduledSiteBlock) throws -> Self {
+        var result = configuration
+        guard result.scheduledSites.remove(original) != nil else { throw BlockingEditError.missingRule }
+        guard original != replacement, !result.scheduledSites.contains(replacement) else { throw BlockingEditError.duplicateRule }
+        result.replacedSchedules = (result.replacedSchedules ?? []).union([original])
+        return try Self(configuration: result).addingScheduledSite(replacement)
     }
 
     public func providerPayload() throws -> CommittedBlockingPayload {
@@ -260,6 +294,18 @@ public struct CommittedBlockingRules: Sendable, Equatable {
             }
         }
         try data.write(to: url, options: .atomic)
+    }
+}
+
+private enum BlockingEditError: LocalizedError {
+    case protectedWebsite, missingRule, duplicateRule
+
+    var errorDescription: String? {
+        switch self {
+        case .protectedWebsite: return "This website is part of built-in protection."
+        case .missingRule: return "This rule changed while you were editing. Reopen it to try again."
+        case .duplicateRule: return "This rule is already saved."
+        }
     }
 }
 
