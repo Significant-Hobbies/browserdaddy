@@ -4,10 +4,15 @@ import SwiftUI
 import SaaSMakerUI
 
 struct BlockingView: View {
+    private enum RuleEditor: Identifiable, Hashable {
+        case newSchedule, schedule(ScheduledSiteBlock), website(BlockingHostname)
+        var id: Self { self }
+    }
+
     @StateObject private var controller: BlockingController
     @StateObject private var protectionCheck: ProtectionCheckModel
     @State private var site = ""
-    @State private var showingSchedule = false
+    @State private var editor: RuleEditor?
 
     init(controller: BlockingController = .shared, protectionCheck: ProtectionCheckModel = ProtectionCheckModel()) {
         _controller = StateObject(wrappedValue: controller)
@@ -33,7 +38,6 @@ struct BlockingView: View {
                             Text("PROTECTION").font(.system(size: 10, weight: .medium)).tracking(1.2)
                                 .foregroundStyle(BrowserTheme.secondaryInk)
                             filterStatus
-                            lockedRulesNote
                             protectionDetails
                         }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(width: 280)
@@ -45,7 +49,6 @@ struct BlockingView: View {
                         filterStatus
                         schedules
                         alwaysBlocked
-                        lockedRulesNote
                         protectionDetails
                     }.padding(30).frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -53,7 +56,16 @@ struct BlockingView: View {
         }
         .background(BrowserTheme.palette.background)
         .buttonStyle(SMMacButtonStyle(.secondary))
-        .sheet(isPresented: $showingSchedule) { BlockingScheduleSheet(controller: controller) }
+        .sheet(item: $editor) { editor in
+            switch editor {
+            case .newSchedule:
+                BlockingScheduleSheet(controller: controller)
+            case .schedule(let original):
+                BlockingScheduleSheet(controller: controller, original: original)
+            case .website(let original):
+                BlockingWebsiteSheet(controller: controller, original: original)
+            }
+        }
         .onAppear { protectionCheck.startObservingNetwork() }
         .onDisappear { protectionCheck.stopObservingNetwork() }
         .onChange(of: controller.configuration) { _, _ in protectionCheck.invalidate() }
@@ -86,7 +98,7 @@ struct BlockingView: View {
                     Text("Choose the hours a website stays out of reach.").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
                 }
                 Spacer(minLength: 16)
-                Button("Add schedule") { showingSchedule = true }
+                Button("Add schedule") { editor = .newSchedule }
                     .buttonStyle(SMMacButtonStyle(.primary))
                     .disabled(!controller.ready || controller.busy || scheduleLimitReached)
                     .accessibilityIdentifier("add-schedule")
@@ -118,16 +130,13 @@ struct BlockingView: View {
             } else {
                 VStack(spacing: 16) {
                     ForEach(scheduleGroups) { group in
-                        BlockingScheduleCard(group: group)
+                        BlockingScheduleCard(group: group, editingEnabled: controller.ready && !controller.busy) {
+                            editor = .schedule($0)
+                        }
                     }
                 }
             }
         }
-    }
-
-    private var lockedRulesNote: some View {
-        Label("Saved rules are locked. Ask in Codex chat to change or remove one.", systemImage: "lock")
-            .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
     }
 
     private var protectionDetails: some View {
@@ -188,10 +197,18 @@ struct BlockingView: View {
             Text("Always blocked").font(.custom(BrowserTheme.palette.sansFont, size: 18).weight(.semibold))
             VStack(spacing: 0) {
                 ForEach(BlockingCategory.allCases.filter { controller.configuration.categories.contains($0) }, id: \.self) { category in
-                    permanentRow(category.title, detail: "All day")
+                    builtInRow(category.title)
                 }
                 ForEach(controller.configuration.sites.sorted(by: { $0.value < $1.value }), id: \.self) { host in
-                    permanentRow(host.value, detail: "All day")
+                    if CommittedBlockingRules.protectedSites.contains(host) {
+                        builtInRow(host.value)
+                    } else {
+                        websiteRow(host.value, icon: "globe") {
+                            Button("Edit") { editor = .website(host) }
+                                .disabled(!controller.ready || controller.busy)
+                                .accessibilityLabel("Edit website \(host.value)")
+                        }
+                    }
                 }
                 if !controller.ready {
                     Text(controller.loadError.isEmpty
@@ -216,13 +233,20 @@ struct BlockingView: View {
         }
     }
 
-    private func permanentRow(_ title: String, detail: String) -> some View {
+    private func builtInRow(_ title: String) -> some View {
+        websiteRow(title, icon: "lock") {
+            Text("Built-in").font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+        }
+    }
+
+    private func websiteRow<Accessory: View>(_ title: String, icon: String,
+                                             @ViewBuilder accessory: () -> Accessory) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "lock").font(.system(size: 12))
+            Image(systemName: icon).font(.system(size: 12))
                 .foregroundStyle(BrowserTheme.secondaryInk).frame(width: 18)
             Text(title).font(.callout.weight(.medium))
             Spacer(minLength: 16)
-            Text(detail).font(.caption).foregroundStyle(BrowserTheme.secondaryInk)
+            accessory()
         }
         .textSelection(.enabled)
         .padding(.vertical, 14)
@@ -318,5 +342,90 @@ struct BlockingView: View {
         if let host = BlockingHostname(site.trimmingCharacters(in: .whitespacesAndNewlines)), controller.configuration.sites.contains(host) {
             site = ""
         } else { _ = controller.addSite(site) }
+    }
+}
+private struct BlockingWebsiteSheet: View {
+    @ObservedObject var controller: BlockingController
+    let original: BlockingHostname
+    @Environment(\.dismiss) private var dismiss
+    @State private var website: String
+    @State private var submission = BlockingRuleSubmission<BlockingHostname>.idle
+    @FocusState private var websiteFocused: Bool
+
+    init(controller: BlockingController, original: BlockingHostname) {
+        self.controller = controller
+        self.original = original
+        _website = State(initialValue: original.value)
+    }
+
+    private var replacement: BlockingHostname? {
+        BlockingHostname(website.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private var saved: Set<BlockingHostname> { controller.configuration.sites }
+
+    private var canSave: Bool {
+        guard let replacement else { return false }
+        return controller.ready && !controller.busy && !submission.isSaving
+            && saved.contains(original) && !saved.contains(replacement)
+    }
+
+    private var validationMessage: String? {
+        if !saved.contains(original) { return "This rule changed. Reopen it to edit the latest version." }
+        guard let replacement else { return "Enter a domain such as example.com, without a path or scheme." }
+        if replacement != original && saved.contains(replacement) { return "This website is already saved." }
+        return nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SMSectionHeader("Edit website", size: 22)
+            TextField("Website domain", text: $website, prompt: Text("example.com"))
+                .textFieldStyle(.roundedBorder)
+                .focused($websiteFocused)
+                .disabled(submission.isSaving)
+            Text(validationMessage ?? "The block applies to this domain and its subdomains.")
+                .font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+            if let message = submission.error {
+                Text(message).font(.callout).foregroundStyle(BrowserTheme.palette.destructive)
+            }
+            HStack {
+                if submission.isSaving {
+                    ProgressView().controlSize(.small)
+                    Text("Saving website…").font(.callout).foregroundStyle(BrowserTheme.palette.mutedForeground)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(submission.isSaving)
+                Button("Save changes", action: save)
+                    .buttonStyle(SMMacButtonStyle(.primary))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+        .background(BrowserTheme.palette.background)
+        .browserTheme(BrowserTheme.palette)
+        .buttonStyle(SMMacButtonStyle(.secondary))
+        .interactiveDismissDisabled(submission.isSaving)
+        .onAppear { websiteFocused = true }
+        .onChange(of: saved) { _, _ in resolveSave() }
+        .onChange(of: controller.busy) { _, busy in if !busy { resolveSave() } }
+    }
+
+    private func save() {
+        guard canSave, let replacement else { return }
+        submission = .saving(replacement)
+        if !controller.editSite(original, replacement: replacement) {
+            submission = .failed("The website could not be saved. Refresh the filter status and try again.")
+        }
+    }
+
+    private func resolveSave() {
+        if submission.resolve(saved: saved, busy: controller.busy, error: controller.error, replacing: original) {
+            dismiss()
+        }
     }
 }
