@@ -43,6 +43,23 @@ final class ArchiveTests: XCTestCase {
         XCTAssertThrowsError(try BrowserWorkspaceArchive.create(at: destination))
     }
 
+    func testImportAcceptsLegacyCategoryColumnsAndRejectsUnknownData() throws {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try store.db.execute("ALTER TABLE domain_categories DROP COLUMN source")
+        try store.db.execute("INSERT INTO domain_categories (host,category,confidence) VALUES ('example.test','Work',1)")
+        let first = parent.appendingPathComponent("first")
+        try BrowserWorkspaceArchive.create(at: first, importing: tmp)
+        let copied = try ArchiveStore(url: first.appendingPathComponent("browserdaddy.db"))
+        XCTAssertEqual(try copied.db.scalar("SELECT category FROM domain_categories", as: { $0.text }), "Work")
+        try store.db.execute("ALTER TABLE visits ADD COLUMN futureField TEXT")
+        let second = parent.appendingPathComponent("second")
+        XCTAssertThrowsError(try BrowserWorkspaceArchive.create(at: second, importing: tmp)) { error in
+            XCTAssertTrue(error is BrowserWorkspaceArchive.ImportFailure)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+    }
+
     func testInvalidArchiveCanBeRetriedWithoutPublishingPartialData() throws {
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: destination) }

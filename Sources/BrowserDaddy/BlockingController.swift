@@ -463,7 +463,14 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties,
-                            withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction { .replace }
+                            withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
+        guard Bundle.main.bundleIdentifier == "com.significanthobbies.daddyrad" else { return .replace }
+        return Self.replacementAction(installed: existing.bundleVersion, candidate: ext.bundleVersion)
+    }
+
+    nonisolated static func replacementAction(installed: String, candidate: String) -> OSSystemExtensionRequest.ReplacementAction {
+        candidate.compare(installed, options: .numeric) == .orderedAscending ? .cancel : .replace
+    }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
         Task { @MainActor in
             self.activationRequest = nil

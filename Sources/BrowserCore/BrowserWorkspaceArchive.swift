@@ -3,6 +3,10 @@ import Foundation
 /// A unified host owns an independent archive. Copy the selected SQLite snapshot
 /// with its committed WAL rows and publish the completed directory exclusively.
 public enum BrowserWorkspaceArchive {
+    public enum ImportFailure: Error {
+        case unsupportedSchema
+    }
+
     public static func create(at directory: URL, importing source: URL? = nil) throws {
         let fm = FileManager.default
         let parent = directory.deletingLastPathComponent()
@@ -32,26 +36,28 @@ public enum BrowserWorkspaceArchive {
         guard let path = uri?.string else { throw CocoaError(.fileReadInvalidFileName) }
         try db.execute("ATTACH DATABASE ? AS original", [.text(path)])
         defer { _ = try? db.execute("DETACH DATABASE original") }
-        let tables = ["visits", "focus", "meta", "searches", "domain_categories", "page_categories"]
+        let tables = try db.query("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'")
+            .compactMap { $0["name"]?.text }
         try db.writeTransaction {
             let original = try db.query("""
                 SELECT name, type, sql FROM original.sqlite_master
                 WHERE type != 'index' AND name NOT GLOB 'sqlite_*'
                 """)
             let names = Set(original.compactMap { $0["name"]?.text })
-            guard names.isSubset(of: Set(tables)), Set(["visits", "focus", "meta"]).isSubset(of: names),
+            guard Set(["visits", "focus", "meta"]).isSubset(of: names),
                   original.allSatisfy({ row in
                       row["type"]?.text == "table" &&
                         row["sql"]?.text?.uppercased().hasPrefix("CREATE TABLE") == true
                   })
             else { throw CocoaError(.fileReadCorruptFile) }
+            guard names.isSubset(of: Set(tables)) else { throw ImportFailure.unsupportedSchema }
             for table in tables where names.contains(table) {
                 let expected = try db.query("PRAGMA main.table_info(\(table))").compactMap { $0["name"]?.text }
                 let existing = Set(try db.query("PRAGMA original.table_xinfo(\(table))").compactMap { $0["name"]?.text })
                 // Category provenance was added by migration. Older sources can
                 // omit it. Unknown data requires a newer importer.
-                guard existing.isSubset(of: Set(expected)),
-                      Set(expected.filter { $0 != "source" }).isSubset(of: existing) else {
+                guard existing.isSubset(of: Set(expected)) else { throw ImportFailure.unsupportedSchema }
+                guard Set(expected.filter { $0 != "source" }).isSubset(of: existing) else {
                     throw CocoaError(.fileReadCorruptFile)
                 }
                 let columns = expected.filter { existing.contains($0) }.joined(separator: ", ")

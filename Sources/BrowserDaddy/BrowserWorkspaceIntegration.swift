@@ -49,6 +49,11 @@ import SwiftUI
             _ = try probe.query("SELECT key,value FROM meta LIMIT 0")
             _ = try probe.query("SELECT browser,profile,visit_id FROM visits LIMIT 0")
             _ = try probe.query("SELECT start_utc,active_s FROM focus LIMIT 0")
+        } catch {
+            problem = "The database is unreadable or has an unfamiliar format. Restore a BrowserDaddy backup, or move the Archive folder aside in Finder, then retry."
+            return
+        }
+        do {
             let app = AppModel(store: try ArchiveStore(url: database))
             self.model = app
             needsRecovery = false
@@ -83,7 +88,11 @@ import SwiftUI
                 preparing = false
                 resume()
                 if model == nil && !needsRecovery {
-                    problem = "Could not prepare the archive. Choose a readable BrowserDaddy database and retry. Existing archives are preserved."
+                    if error is BrowserWorkspaceArchive.ImportFailure {
+                        problem = "This archive contains newer or unfamiliar fields. Keep the original and import it with a compatible version."
+                    } else {
+                        problem = "Could not prepare the archive. Choose a readable BrowserDaddy archive folder and retry."
+                    }
                 }
             }
         }
@@ -123,7 +132,7 @@ public struct BrowserWorkspaceView: View {
                                 "Library/Containers/com.significanthobbies.browserdaddy/Data/Library/Application Support/BrowserDaddy",
                                 isDirectory: true)
                             panel.allowsMultipleSelection = false
-                            panel.message = "Choose the BrowserDaddy archive folder or its browserdaddy.db file. Selecting the folder includes recent changes from a running copy of BrowserDaddy."
+                            panel.message = "Choose the BrowserDaddy archive folder or its browserdaddy.db file."
                             if panel.runModal() == .OK, let url = panel.url { browser.prepare(importing: url) }
                         }
                         Button("Start new archive") { browser.prepare(importing: nil) }
@@ -192,6 +201,7 @@ public struct BrowserWorkspaceSettings: View {
     public var body: some View {
         Group {
             if let model = browser.model { BrowserSettingsContent(model: model) }
+            else if browser.needsRecovery { Text(browser.problem ?? "Open Browser to recover the local archive.") }
             else { Text("Open Browser to set up the local archive.") }
         }
         .onAppear { BrowserWorkspaceRuntime.start() }

@@ -3,6 +3,12 @@ import XCTest
 @testable import BrowserDaddy
 
 final class BrowserWorkspaceRecoveryTests: XCTestCase {
+    func testInstalledFilterCannotBeDowngraded() {
+        XCTAssertEqual(BlockingController.replacementAction(installed: "32", candidate: "9"), .cancel)
+        XCTAssertEqual(BlockingController.replacementAction(installed: "32", candidate: "32"), .replace)
+        XCTAssertEqual(BlockingController.replacementAction(installed: "9", candidate: "32"), .replace)
+    }
+
     @MainActor func testRetryPreservesExistingArchiveAndDistinguishesFreshSetup() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -18,6 +24,7 @@ final class BrowserWorkspaceRecoveryTests: XCTestCase {
         try damaged.write(to: file)
         browser.resume()
         XCTAssertTrue(browser.needsRecovery)
+        XCTAssertTrue(browser.problem?.contains("move the Archive folder aside") == true)
         XCTAssertNil(browser.model)
         XCTAssertEqual(try Data(contentsOf: file), damaged)
     }
