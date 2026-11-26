@@ -56,14 +56,16 @@ final class LinkRouterService: NSObject {
     static let modifiers = UInt32(controlKey | optionKey)
     private var hotKeyRefs: [EventHotKeyRef?] = []
 
-    func install() {
+    func install(handlesAppleEvents: Bool = true) {
         guard !installed else { return }
         installed = true
-        NSAppleEventManager.shared().setEventHandler(
-            self,
-            andSelector: #selector(handleGetURL(_:withReply:)),
-            forEventClass: AEEventClass(fourCharCode("GURL")),
-            andEventID: AEEventID(fourCharCode("GURL")))
+        if handlesAppleEvents {
+            NSAppleEventManager.shared().setEventHandler(
+                self,
+                andSelector: #selector(handleGetURL(_:withReply:)),
+                forEventClass: AEEventClass(fourCharCode("GURL")),
+                andEventID: AEEventID(fourCharCode("GURL")))
+        }
         hotKeyRefs = [
             GlobalHotKey.install(keyCode: Self.clipboardKey.code,
                                  modifiers: Self.modifiers) { [weak self] in

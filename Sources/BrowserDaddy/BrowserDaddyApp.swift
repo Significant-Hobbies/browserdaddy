@@ -248,10 +248,9 @@ private struct MenuBarIcon: View {
     }
 }
 
-@main
-enum BrowserDaddyMain {
+public enum BrowserDaddyMain {
     @MainActor
-    static func main() {
+    public static func main() {
         if CommandLine.arguments.contains("--check-ui-resources") {
             guard BrowserUIResources.loaded else {
                 FileHandle.standardError.write(Data("BrowserDaddy UI resources missing or invalid\n".utf8))
@@ -282,31 +281,7 @@ struct BrowserDaddyApp: App {
         // open (menu item, Dock/⌘-tab reopen).
         mainWindow.defaultLaunchBehavior(BrowserStartupCheck.enabled || CommandLine.arguments.contains("--preview-fixture") ? .presented : .suppressed)
 
-        Settings {
-            Group {
-                if let model = startup.model {
-                    VStack(alignment: .leading, spacing: 18) {
-                        AlertSettingsView()
-                        Divider().overlay(BrowserTheme.divider)
-                        Button("Review first-run setup…") {
-                            model.replayOnboarding()
-                        }
-                        Text("Reopens onboarding — connect browsers, review "
-                             + "what's collected.")
-                            .font(.caption)
-                            .foregroundStyle(BrowserTheme.secondaryInk)
-                    }
-                    .environmentObject(model)
-                } else {
-                    Text("Archive unavailable — reopen the app.")
-                        .foregroundStyle(BrowserTheme.secondaryInk)
-                }
-            }
-            .padding(24).frame(width: 480)
-            .smWorkspaceWindowChrome()
-            .browserTheme(BrowserTheme.palette)
-            .buttonStyle(SMMacButtonStyle(.secondary))
-        }
+        Settings { StandaloneBrowserSettings() }
     }
 
     private var mainWindow: some Scene {
@@ -351,6 +326,43 @@ struct BrowserDaddyApp: App {
     }
 }
 
+/// Browser preferences shared by the standalone app and the unified host.
+private struct StandaloneBrowserSettings: View {
+    @ObservedObject private var startup = BrowserDaddyRuntime.startup
+    public init() {}
+    public var body: some View {
+        Group {
+            if let model = startup.model {
+                BrowserSettingsContent(model: model)
+            } else {
+                Text("Archive unavailable — reopen the app.").foregroundStyle(BrowserTheme.secondaryInk)
+            }
+        }
+        .padding(24).frame(width: 480)
+        .smWorkspaceWindowChrome()
+        .browserTheme(BrowserTheme.palette)
+        .buttonStyle(SMMacButtonStyle(.secondary))
+    }
+}
+
+struct BrowserSettingsContent: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            AlertSettingsView()
+            Divider().overlay(BrowserTheme.divider)
+            Button("Review first-run setup…") {
+                model.replayOnboarding()
+            }
+            Text("Reopens onboarding — connect browsers, review "
+                 + "what's collected.")
+                .font(.caption)
+                .foregroundStyle(BrowserTheme.secondaryInk)
+        }
+        .environmentObject(model)
+    }
+}
+
 enum Workspace: String, CaseIterable, Identifiable {
     case attention = "Attention", tabs = "Tabs", dashboard = "Dashboard",
          history = "History", router = "Router", blocking = "Blocking", permissions = "Permissions"
@@ -375,12 +387,21 @@ struct RootView: View {
     private let reviewBlockingController: BlockingController?
     private let reviewProtectionCheck: ProtectionCheckModel?
     private let reviewOnly: Bool
+    private var embedded = false
 
     init() {
         _workspace = State(initialValue: Self.initialWorkspace(arguments: CommandLine.arguments))
         reviewBlockingController = nil
         reviewProtectionCheck = nil
         reviewOnly = false
+    }
+
+    init(embeddedWorkspace: Workspace) {
+        _workspace = State(initialValue: embeddedWorkspace)
+        reviewBlockingController = nil
+        reviewProtectionCheck = nil
+        reviewOnly = false
+        embedded = true
     }
 
     init(reviewWorkspace: Workspace, blockingController: BlockingController,
@@ -399,7 +420,7 @@ struct RootView: View {
     }
 
     var body: some View {
-        BrowserWorkspaceChrome(workspace: $workspace, reviewOnly: reviewOnly) {
+        BrowserWorkspaceChrome(workspace: $workspace, reviewOnly: reviewOnly, embedded: embedded) {
             content
         } footer: {
             if workspace == .blocking {
@@ -411,7 +432,6 @@ struct RootView: View {
             }
         }
         .buttonStyle(SMMacButtonStyle(.secondary))
-        .smWorkspaceWindowChrome()
         .browserTheme(BrowserTheme.palette)
         .sheet(isPresented: $model.showAbout) {
             about.browserTheme(BrowserTheme.palette).buttonStyle(SMMacButtonStyle(.secondary))

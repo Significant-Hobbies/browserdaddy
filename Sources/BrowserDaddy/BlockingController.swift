@@ -235,9 +235,13 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         preview = suppliedPreview ?? (CommandLine.arguments.contains("--preview-fixture")
             || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true)
         super.init()
+        let unifiedRules = Bundle.main.bundleIdentifier == "com.significanthobbies.daddyrad"
+            ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("daddyrad/Browser/Filter").appendingPathComponent(BlockingConfiguration.filename)
+            : nil
         rulesURL = suppliedURL ?? (preview
             ? FileManager.default.temporaryDirectory.appendingPathComponent("BrowserDaddy-blocking-preview-\(UUID().uuidString).json")
-            : FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
+            : unifiedRules ?? FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
                 .appendingPathComponent(BlockingConfiguration.filename))
         loadRules()
     }
@@ -292,9 +296,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         return try Data(contentsOf: url)
     }
 
-    var extensionBundled: Bool {
-        extensionAvailable ?? FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
+    static var hostIncludesFilter: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
     }
+
+    var extensionBundled: Bool { extensionAvailable ?? Self.hostIncludesFilter }
 
     func refresh() {
         if !ready { loadRules(); return }
@@ -457,7 +463,14 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties,
-                            withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction { .replace }
+                            withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
+        guard Bundle.main.bundleIdentifier == "com.significanthobbies.daddyrad" else { return .replace }
+        return Self.replacementAction(installed: existing.bundleVersion, candidate: ext.bundleVersion)
+    }
+
+    nonisolated static func replacementAction(installed: String, candidate: String) -> OSSystemExtensionRequest.ReplacementAction {
+        candidate.compare(installed, options: .numeric) == .orderedAscending ? .cancel : .replace
+    }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
         Task { @MainActor in
             self.activationRequest = nil

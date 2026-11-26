@@ -26,7 +26,7 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 for path in sorted((repo / 'Sources' / 'BrowserDaddy').rglob('*')):
-    if not path.is_file() or path.name == 'BrowserDaddyApp.swift':
+    if not path.is_file() or path.name in ('BrowserDaddyApp.swift', 'BrowserWorkspaceIntegration.swift'):
         continue
     relative = path.relative_to(repo / 'Sources' / 'BrowserDaddy')
     target = source / relative

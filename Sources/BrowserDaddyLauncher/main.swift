@@ -1,0 +1,3 @@
+import BrowserDaddy
+
+BrowserDaddyMain.main()
