@@ -31,6 +31,10 @@ def validate_filter_signature(path):
 def validate_filter_pairing(path, info, version, build):
     if info.get("CFBundleShortVersionString") != version or info.get("CFBundleVersion") != str(build):
         raise SystemExit("Filter version must match the host release version and build")
+    validate_filter_resources(path)
+
+
+def validate_filter_resources(path):
     source = ROOT / "Sources/BrowserDaddy/Resources/BlockingLists"
     manifest = json.loads((source / "SOURCE.json").read_text())
     resources = path / "Contents/Resources"

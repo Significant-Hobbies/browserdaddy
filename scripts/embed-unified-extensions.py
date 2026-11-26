@@ -49,8 +49,9 @@ def main():
         info = plistlib.loads((args.filter_extension / "Contents/Info.plist").read_bytes())
         if info.get("NetworkExtension", {}).get("NEMachServiceName") != packaging.FILTER_SERVICE:
             parser.error("Unexpected filter Mach service")
-        packaging.validate_filter_pairing(args.filter_extension, info,
-                                         info["CFBundleShortVersionString"], info["CFBundleVersion"])
+        # The verified BrowserDaddy filter preserves its own release identity.
+        # The unified host has an independent version and must match its lists.
+        packaging.validate_filter_resources(args.filter_extension)
         validate_profile(plistlib.loads(subprocess.check_output(
             ["security", "cms", "-D", "-i", str(args.filter_host_profile)])))
     safari_target = contents / "PlugIns/SafariTabsExtension.appex"

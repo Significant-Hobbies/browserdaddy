@@ -235,9 +235,13 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         preview = suppliedPreview ?? (CommandLine.arguments.contains("--preview-fixture")
             || Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true)
         super.init()
+        let unifiedRules = Bundle.main.bundleIdentifier == "com.significanthobbies.daddyrad"
+            ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("daddyrad/Browser/Filter").appendingPathComponent(BlockingConfiguration.filename)
+            : nil
         rulesURL = suppliedURL ?? (preview
             ? FileManager.default.temporaryDirectory.appendingPathComponent("BrowserDaddy-blocking-preview-\(UUID().uuidString).json")
-            : FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
+            : unifiedRules ?? FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: BlockingConfiguration.group)?
                 .appendingPathComponent(BlockingConfiguration.filename))
         loadRules()
     }

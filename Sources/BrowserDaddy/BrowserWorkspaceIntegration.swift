@@ -17,20 +17,41 @@ import SwiftUI
     public static var activeWorkDescription: String? { EmbeddedBrowser.shared.model?.activeWorkDescription }
 }
 
-@MainActor private final class EmbeddedBrowser: ObservableObject {
+@MainActor final class EmbeddedBrowser: ObservableObject {
     static let shared = EmbeddedBrowser()
-    private let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("daddyrad/Browser/Archive", isDirectory: true)
+    let directory: URL
+
+    init(directory: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("daddyrad/Browser/Archive", isDirectory: true)) {
+        self.directory = directory
+    }
     private var database: URL { directory.appendingPathComponent("browserdaddy.db") }
     @Published private(set) var model: AppModel?
+    @Published private(set) var needsRecovery = false
     @Published private(set) var preparing = false
     @Published private(set) var problem: String?
 
     func resume() {
-        guard model == nil, !preparing, FileManager.default.fileExists(atPath: database.path) else { return }
+        guard model == nil, !preparing else { return }
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            needsRecovery = false
+            problem = nil
+            return
+        }
+        needsRecovery = true
+        guard FileManager.default.fileExists(atPath: database.path) else {
+            problem = "The archive folder exists, but its database is missing. Inspect the folder or restore the database, then retry."
+            return
+        }
         do {
+            // Verify the existing database before ArchiveStore applies migrations.
+            let probe = try SQLiteStore(url: database, readOnly: true)
+            _ = try probe.query("SELECT key,value FROM meta LIMIT 0")
+            _ = try probe.query("SELECT browser,profile,visit_id FROM visits LIMIT 0")
+            _ = try probe.query("SELECT start_utc,active_s FROM focus LIMIT 0")
             let app = AppModel(store: try ArchiveStore(url: database))
             self.model = app
+            needsRecovery = false
             app.boot()
             if BlockingController.hostIncludesFilter { _ = BlockingController.shared }
             LinkRouterService.shared.install(handlesAppleEvents: false)
@@ -50,14 +71,18 @@ import SwiftUI
                 try await Task.detached(priority: .userInitiated) {
                     let scoped = source?.startAccessingSecurityScopedResource() ?? false
                     defer { if scoped { source?.stopAccessingSecurityScopedResource() } }
-                    try BrowserWorkspaceArchive.create(at: directory, importing: source)
+                    let file = try source.map { selection in
+                        try selection.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+                            ? selection.appendingPathComponent("browserdaddy.db") : selection
+                    }
+                    try BrowserWorkspaceArchive.create(at: directory, importing: file)
                 }.value
                 preparing = false
                 resume()
             } catch {
                 preparing = false
                 resume()
-                if model == nil {
+                if model == nil && !needsRecovery {
                     problem = "Could not prepare the archive. Choose a readable BrowserDaddy database and retry. Existing archives are preserved."
                 }
             }
@@ -76,6 +101,15 @@ public struct BrowserWorkspaceView: View {
                 MissingBrowserFilterView()
             } else if let model = browser.model {
                 EmbeddedBrowserContent(model: model, route: route)
+            } else if browser.needsRecovery {
+                ContentUnavailableView {
+                    Label("Browsing archive needs attention", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text(browser.problem ?? "Inspect the existing archive and retry.")
+                } actions: {
+                    Button("Show archive folder") { NSWorkspace.shared.activateFileViewerSelecting([browser.directory]) }
+                    Button("Retry") { browser.resume() }
+                }
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Browsing archive").font(.title2.bold())
@@ -83,9 +117,13 @@ public struct BrowserWorkspaceView: View {
                     HStack {
                         Button("Import BrowserDaddy archive…") {
                             let panel = NSOpenPanel()
-                            panel.canChooseDirectories = false
+                            panel.canChooseDirectories = true
+                            panel.canChooseFiles = true
+                            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+                                "Library/Containers/com.significanthobbies.browserdaddy/Data/Library/Application Support/BrowserDaddy",
+                                isDirectory: true)
                             panel.allowsMultipleSelection = false
-                            panel.message = "Choose browserdaddy.db from the BrowserDaddy application support folder."
+                            panel.message = "Choose the BrowserDaddy archive folder or its browserdaddy.db file. Selecting the folder includes recent changes from a running copy of BrowserDaddy."
                             if panel.runModal() == .OK, let url = panel.url { browser.prepare(importing: url) }
                         }
                         Button("Start new archive") { browser.prepare(importing: nil) }
