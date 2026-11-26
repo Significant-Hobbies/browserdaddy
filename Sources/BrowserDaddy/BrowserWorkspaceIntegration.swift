@@ -72,7 +72,9 @@ public struct BrowserWorkspaceView: View {
 
     public var body: some View {
         Group {
-            if let model = browser.model {
+            if route.lowercased() == Workspace.blocking.rawValue.lowercased() && !BlockingController.hostIncludesFilter {
+                MissingBrowserFilterView()
+            } else if let model = browser.model {
                 EmbeddedBrowserContent(model: model, route: route)
             } else {
                 VStack(alignment: .leading, spacing: 14) {
@@ -101,6 +103,34 @@ public struct BrowserWorkspaceView: View {
     }
 }
 
+private struct MissingBrowserFilterView: View {
+    @State private var error: String?
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("Website blocking requires the signed filter", systemImage: "shield")
+        } description: {
+            Text(error ?? "Manage existing rules in BrowserDaddy until this installation includes the approved system extension.")
+        } actions: {
+            if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.significanthobbies.browserdaddy") {
+                Button("Open BrowserDaddy") {
+                    let running = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.significanthobbies.browserdaddy").isEmpty
+                    NSWorkspace.shared.openApplication(at: app, configuration: .init()) { _, failure in
+                        Task { @MainActor in
+                            if failure != nil { error = "Couldn’t open BrowserDaddy. Open it from Applications to manage your rules." }
+                            else if !running {
+                                // BrowserDaddy runs windowless on cold launch.
+                                // Reopen the active instance to present its workspace.
+                                NSWorkspace.shared.openApplication(at: app, configuration: .init())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private struct EmbeddedBrowserContent: View {
     @ObservedObject var model: AppModel
     let route: String
@@ -109,21 +139,7 @@ private struct EmbeddedBrowserContent: View {
             if model.needsOnboarding {
                 OnboardingView()
             } else if let workspace = Workspace.allCases.first(where: { $0.rawValue.lowercased() == route.lowercased() }) {
-                if workspace == .blocking && !BlockingController.hostIncludesFilter {
-                    ContentUnavailableView {
-                        Label("Website blocking requires the signed filter", systemImage: "shield")
-                    } description: {
-                        Text("Manage existing rules in BrowserDaddy until this installation includes the approved system extension.")
-                    } actions: {
-                        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.significanthobbies.browserdaddy") {
-                            Button("Open BrowserDaddy") {
-                                NSWorkspace.shared.openApplication(at: app, configuration: .init())
-                            }
-                        }
-                    }
-                } else {
-                    RootView(embeddedWorkspace: workspace).id(workspace)
-                }
+                RootView(embeddedWorkspace: workspace).id(workspace)
             } else {
                 ContentUnavailableView("Browser workspace unavailable", systemImage: "rectangle.stack")
             }
