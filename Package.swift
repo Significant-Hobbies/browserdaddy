@@ -13,16 +13,21 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "BrowserCore", targets: ["BrowserCore"]),
-        .executable(name: "BrowserDaddy", targets: ["BrowserDaddy"]),
+        .library(name: "BrowserWorkspaceKit", targets: ["BrowserWorkspaceKit"]),
+        .executable(name: "BrowserDaddy", targets: ["BrowserDaddyLauncher"]),
     ],
     dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"), .package(url: "https://github.com/sass-maker/ui-library", revision: "f45faf3eb04af08cff2022710c8b8157a60bf5fa")],
     targets: [
         .target(name: "BrowserCore"),
-        .executableTarget(
+        .target(
             name: "BrowserDaddy",
             dependencies: [.product(name: "SaaSMakerUI", package: "ui-library"), "BrowserCore", .product(name: "Sparkle", package: "Sparkle")],
             exclude: ["Resources/StorageDaddy.png", "Resources/PageDoodles.png"],
-            resources: [.process("Resources")],
+            resources: [.process("Resources")]
+        ),
+        .target(name: "BrowserWorkspaceKit", dependencies: ["BrowserDaddy"]),
+        .executableTarget(
+            name: "BrowserDaddyLauncher", dependencies: ["BrowserDaddy"],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(name: "BrowserCoreTests", dependencies: ["BrowserCore"]),

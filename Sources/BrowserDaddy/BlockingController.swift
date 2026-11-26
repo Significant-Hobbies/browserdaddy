@@ -292,9 +292,11 @@ final class BlockingController: NSObject, ObservableObject, OSSystemExtensionReq
         return try Data(contentsOf: url)
     }
 
-    var extensionBundled: Bool {
-        extensionAvailable ?? FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
+    static var hostIncludesFilter: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(BlockingConfiguration.extensionID).systemextension").path)
     }
+
+    var extensionBundled: Bool { extensionAvailable ?? Self.hostIncludesFilter }
 
     func refresh() {
         if !ready { loadRules(); return }

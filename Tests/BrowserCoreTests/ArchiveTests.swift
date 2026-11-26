@@ -23,6 +23,36 @@ final class ArchiveTests: XCTestCase {
                      transition: "link", fromVisit: nil)
     }
 
+    func testUnifiedArchiveIsIndependentAndRequiresNewHostConsent() throws {
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        store.metaSet("onboarded", "1")
+        store.metaSet("classify_optin", "1")
+        store.metaSet("classify_consent_version", "1")
+        store.metaSet("routerSettings", "preserved")
+        let source = HistorySource(browser: "chrome", profile: "Default", path: tmp, engine: .chromium)
+        try store.merge(visits: [visit(41)], source: source)
+        try BrowserWorkspaceArchive.create(at: destination, importing: tmp)
+        let archive = try ArchiveStore(url: destination.appendingPathComponent("browserdaddy.db"))
+        XCTAssertEqual(try archive.db.scalar("SELECT visit_id FROM visits", as: { $0.int }), 41)
+        XCTAssertEqual(archive.metaGet("routerSettings"), "preserved")
+        for key in ["onboarded", "classify_optin", "classify_consent_version"] {
+            XCTAssertNil(archive.metaGet(key))
+            XCTAssertEqual(store.metaGet(key), "1")
+        }
+        XCTAssertThrowsError(try BrowserWorkspaceArchive.create(at: destination))
+    }
+
+    func testInvalidArchiveCanBeRetriedWithoutPublishingPartialData() throws {
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        try store.db.execute("DROP TABLE focus")
+        XCTAssertThrowsError(try BrowserWorkspaceArchive.create(at: destination, importing: tmp))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        try BrowserWorkspaceArchive.create(at: destination)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("browserdaddy.db").path))
+    }
+
     func testMergeDedupesOnVisitID() throws {
         let src = HistorySource(browser: "chrome", profile: "Default",
                                 path: tmp, engine: .chromium)

@@ -1,0 +1,6 @@
+import BrowserDaddy
+
+public typealias BrowserWorkspaceView = BrowserDaddy.BrowserWorkspaceView
+public typealias BrowserWorkspaceRuntime = BrowserDaddy.BrowserWorkspaceRuntime
+public typealias BrowserWorkspaceSettings = BrowserDaddy.BrowserWorkspaceSettings
+public typealias BrowserWorkspaceMenu = BrowserDaddy.BrowserWorkspaceMenu
